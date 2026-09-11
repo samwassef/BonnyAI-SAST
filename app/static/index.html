@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GLM Chat</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/chat.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div><p class="eyebrow">YOUR LOCAL AI WORKSPACE</p><h1>GLM Chat<span>5.3</span></h1></div>
+      <button id="clear" type="button" class="secondary">New chat</button></header>
+    <p class="intro">A space to ask, explore, and work through ideas.</p>
+    <form id="repository-form">
+      <h2>Review GitHub source code</h2>
+      <label for="repository-url">Public GitHub repository URL</label>
+      <input id="repository-url" type="url" maxlength="2048" placeholder="https://github.com/owner/repository" required>
+      <label for="repository-ref">Branch, tag, or commit (optional)</label>
+      <input id="repository-ref" maxlength="200" placeholder="Default branch">
+      <p><small>Only supported source-code files are collected; pipeline, Docker, build, configuration, and documentation files are excluded. Selected source files are sent to Hugging Face and your GLM provider. Reviews include vulnerability evidence and proposed fixes. Large repositories may be partially reviewed; the report lists skipped files. Code is never executed or modified.</small></p>
+      <button id="review-repository" type="submit">Review and create HTML report</button>
+      <button id="download-report" class="secondary" type="button" hidden>Download HTML report</button>
+      <p id="repository-status" role="status" aria-live="polite"></p>
+      <pre id="repository-result" aria-label="Repository security review"></pre>
+    </form>
+    <form id="analysis-form">
+      <h2>Analyze a webpage</h2>
+      <label for="target-url">Website URL</label>
+      <input id="target-url" type="url" maxlength="8192" placeholder="https://example.com/" required>
+      <label for="analysis-question">What would you like GLM to analyze?</label>
+      <textarea id="analysis-question" maxlength="4000" rows="2" required>Analyze the HTTP headers and HTML. Explain your observations and cite the evidence.</textarea>
+      <p><small>Headers and full HTML, including cookies and any embedded sensitive data, are sent unchanged to Hugging Face and the inference provider. Only submit websites you are authorized to access. No JavaScript execution.</small></p>
+      <button id="analyze" type="submit">Fetch and analyze</button>
+      <p id="analysis-status" role="status" aria-live="polite"></p>
+      <pre id="analysis-result" aria-label="Webpage analysis"></pre>
+    </form>
+    <section id="messages" role="log" aria-label="Conversation" aria-live="polite">
+      <div id="welcome"><h2>What’s on your mind?</h2><p>Ask a question to start a conversation.</p></div>
+    </section>
+    <p id="status" role="status" aria-live="polite">Ready</p>
+    <form id="composer">
+      <label for="prompt">Your message</label>
+      <textarea id="prompt" rows="3" maxlength="20000" placeholder="Type your question…" required></textarea>
+      <div class="actions"><small>Enter to send · Shift+Enter for a new line</small><button id="send" type="submit">Send message</button></div>
+    </form>
+    <footer>Messages and collected responses are sent to Hugging Face and your configured inference provider. History stays in this tab until refresh or New chat. URL analysis is independent of chat history.</footer>
+  </main>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # Deliberately vulnerable web application
 
-A small, executable security-scanner fixture containing six intentional issues.
+A small, executable security-scanner fixture containing seven intentional issues.
 It uses only Python's standard library, SQLite in memory, and synthetic records.
 Run it locally; it is excluded from the BonnyAI AWS application image.
 
@@ -38,6 +38,7 @@ newsletter state. **Reset demo account** restores account fields without logging
 | VULN-04 | SQL injection | `GET /products?category=...`, `app.py` | Category input is concatenated into an executed SQLite query; injection returns an otherwise hidden record. |
 | VULN-05 | Hardcoded credentials | `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `/login`, `app.py` | Fixed plaintext credentials in source actually authenticate the administrator. |
 | VULN-06 | Sensitive comments | `static/index.html`, served at `/` | HTML comments disclose the working lab login and fictional internal notes, reset token and backup path. |
+| VULN-07 | Vulnerable jQuery 3.4.1 (CVE-2020-11022) | `GET /jquery?fragment=...`, `static/jquery.html` | Attacker-controlled HTML enters jQuery `.append()`; the old `htmlPrefilter` can turn inert style text into an executing image error handler. |
 
 These are expected findings, not measured detection results. A scanner may group
 overlapping findings, such as the credential also disclosed in the HTML comment.
@@ -106,13 +107,26 @@ Use **View page source** on the home page and find `VULN-06`. It exposes a lab
 password, a synthetic reset token, an internal backup path and a release note.
 The reset token/path are fictional, and no backup download endpoint exists.
 
+### 7. Vulnerable jQuery
+
+Open `/jquery` and enter this fragment, then press **Render fragment**:
+
+```html
+<style><style/><img src=/missing-jquery-lab-image onerror="document.body.dataset.jqueryXss='executed';document.querySelector('#result').textContent='Payload executed'">
+```
+
+The page displays **Payload executed** and sets `data-jquery-xss="executed"` on
+the body. This uses jQuery 3.4.1's HTML prefilter behavior, covered by
+[CVE-2020-11022](https://github.com/jquery/jquery/security/advisories/GHSA-gxr4-xjj5-5px2).
+The image URL and marker stay on the local lab; no data is sent elsewhere.
+
 ## Verification
 
 ```powershell
 .venv/Scripts/python.exe test-cases/vulnerable-webapp/verify_lab.py
 ```
 
-Seven checks start temporary local servers on random ports, exercise the six
+Eight checks start temporary local servers on random ports, exercise the original six
 vulnerabilities and account reset, then stop the servers. These HTTP checks verify
 the unescaped XSS payload and frame headers; use the browser steps above to observe
 actual JavaScript execution, automatic session-cookie handling, and click redirection.
@@ -124,7 +138,7 @@ Microsoft Edge (or set `BROWSER_PATH` to a Chromium executable):
 node test-cases/vulnerable-webapp/verify_browser.cjs
 ```
 
-It starts the lab on temporary ports, verifies all six cases in a real headless
+It starts the lab on temporary ports, verifies all seven cases in a real headless
 browser, and stops the processes. Both the seven HTTP checks and the six-case
 browser run passed when this fixture was added.
 
@@ -154,3 +168,5 @@ for runtime reproduction and GitHub review for source analysis.
   configuration rather than a fixed source-visible administrator password.
 - Sensitive comments: remove internal notes and credential values from delivered
   HTML; rotate any real exposed secret in an actual application.
+- Vulnerable jQuery: upgrade to a patched version and avoid passing untrusted HTML
+  to DOM manipulation methods.

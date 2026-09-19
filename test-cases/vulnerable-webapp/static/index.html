@@ -12,7 +12,7 @@
 <body>
   <h1>Deliberately vulnerable web app</h1>
   <p class="notice">Local training fixture. All accounts, credentials and records are synthetic.</p>
-  <p>This application intentionally contains six security issues. Changes last only until restart.</p>
+  <p>This application intentionally contains seven security issues. Changes last only until restart.</p>
   <ol>
     <li><a href="/search?q=hello">XSS: reflected search input</a></li>
     <li><a href="{{ATTACKER_ORIGIN}}/csrf">CSRF: forged account email update</a> (log in first)</li>
@@ -20,6 +20,7 @@
     <li><a href="/products?category=office">SQL injection: product category filter</a></li>
     <li><a href="/login">Hardcoded credentials: admin login</a> — <code>admin / LabOnly123!</code></li>
     <li>Sensitive comments: inspect this page's HTML source.</li>
+    <li><a href="/jquery">Vulnerable jQuery 3.4.1: HTML parsing XSS</a></li>
   </ol>
   <p><a href="/account">Account and reset controls</a> · <a href="{{ATTACKER_ORIGIN}}/">Attacker demonstrations</a></p>
   <!-- VULN-06: Internal notes accidentally delivered to every visitor.

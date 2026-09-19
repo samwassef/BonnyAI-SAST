@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Vulnerable jQuery demo</title>
+  <style>body {font:17px system-ui;max-width:850px;margin:40px auto;padding:0 20px;line-height:1.6} input {width:100%;max-width:680px} code {background:#eee;padding:4px} .notice {color:#9b2500}</style>
+</head>
+<body>
+  <p><a href="/">Lab home</a></p>
+  <h1>Vulnerable jQuery 3.4.1</h1>
+  <p class="notice">Local training fixture. Use synthetic data only.</p>
+  <p>This page inserts the <code>fragment</code> URL parameter with jQuery's <code>.append()</code>. The old <code>htmlPrefilter</code> can turn text inside a style element into executable markup.</p>
+  <form action="/jquery" method="get">
+    <label>HTML fragment <input name="fragment" value="Hello from jQuery"></label>
+    <button>Render fragment</button>
+  </form>
+  <div id="rendered"></div>
+  <p id="result">No payload executed.</p>
+  <script src="/vendor/jquery-3.4.1.min.js"></script>
+  <script>
+    // VULN-07 (CVE-2020-11022): attacker-controlled HTML reaches an affected
+    // jQuery DOM manipulation method. The marker has no network side effect.
+    const fragment = new URLSearchParams(location.search).get('fragment');
+    if (fragment !== null) $('#rendered').append(fragment);
+  </script>
+</body>
+</html>

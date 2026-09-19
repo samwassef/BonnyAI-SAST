@@ -73,6 +73,15 @@ def make_handler(state, target_origin, attacker_origin, *, attacker=False):
             self.end_headers()
             self.wfile.write(data)
 
+        def respond_script(self, filename):
+            data = (STATIC / "vendor" / filename).read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/javascript; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
         def redirect(self, location, headers=None):
             self.respond("", 303, {"Location": location, **(headers or {})})
 
@@ -111,6 +120,10 @@ def make_handler(state, target_origin, attacker_origin, *, attacker=False):
                 # VULN-06: Sensitive comments in this HTML reach the browser unchanged.
                 html = (STATIC / "index.html").read_text(encoding="utf-8")
                 self.respond(html.replace("{{ATTACKER_ORIGIN}}", attacker_origin))
+            elif url.path == "/vendor/jquery-3.4.1.min.js":
+                self.respond_script("jquery-3.4.1.min.js")
+            elif url.path == "/jquery":
+                self.respond((STATIC / "jquery.html").read_text(encoding="utf-8"))
             elif url.path == "/search":
                 term = query.get("q", [""])[0]
                 # VULN-01: Untrusted query text enters HTML without escaping.

@@ -53,6 +53,16 @@ class VulnerableLabTests(unittest.TestCase):
         self.assertIn(payload, html)
         self.assertNotIn('&lt;script&gt;', html)
 
+    def test_vulnerable_jquery_is_loaded_by_demo(self):
+        status, _, html = self.request('/jquery')
+        self.assertEqual(status, 200)
+        self.assertIn('/vendor/jquery-3.4.1.min.js', html)
+        self.assertIn("$('#rendered').append(fragment)", html)
+        status, headers, script = self.request('/vendor/jquery-3.4.1.min.js')
+        self.assertEqual(status, 200)
+        self.assertIn('text/javascript', headers['Content-Type'])
+        self.assertIn('jQuery v3.4.1', script)
+
     def test_csrf_changes_authenticated_state_from_another_origin(self):
         headers = {**self.login(), 'Origin': self.attacker_origin, 'Referer': self.attacker_origin + '/csrf'}
         status, _, _ = self.request('/profile/email', 'POST', {'email': 'attacker@example.test'}, headers)

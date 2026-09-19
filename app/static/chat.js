@@ -6,6 +6,7 @@ const tokenBox = document.querySelector('#hf-token');
 const send = document.querySelector('#send');
 const clear = document.querySelector('#clear');
 const cancel = document.querySelector('#cancel');
+const tabs = [...document.querySelectorAll('#workspace-tabs [role="tab"]')];
 let history = [];
 let busy = false;
 let repositoryReport = null;
@@ -14,6 +15,31 @@ let pageGeneration = 0;
 const config = fetch('/api/config', {cache: 'no-store'})
   .then(r => r.ok ? r.json() : {token_required: true})
   .catch(() => ({token_required: true}));
+
+function activateTab(tab, focus = false) {
+  for (const item of tabs) {
+    const selected = item === tab;
+    item.setAttribute('aria-selected', String(selected));
+    item.tabIndex = selected ? 0 : -1;
+    document.getElementById(item.getAttribute('aria-controls')).hidden = !selected;
+  }
+  if (focus) tab.focus();
+}
+
+for (const [index, tab] of tabs.entries()) {
+  tab.addEventListener('click', () => activateTab(tab));
+  tab.addEventListener('keydown', event => {
+    let next;
+    if (event.key === 'ArrowRight') next = tabs[(index + 1) % tabs.length];
+    else if (event.key === 'ArrowLeft') next = tabs[(index + tabs.length - 1) % tabs.length];
+    else if (event.key === 'Home') next = tabs[0];
+    else if (event.key === 'End') next = tabs[tabs.length - 1];
+    if (next) {
+      event.preventDefault();
+      activateTab(next, true);
+    }
+  });
+}
 
 function setBusy(value) {
   busy = value;
@@ -194,6 +220,7 @@ function resetSession() {
   }
   for (const form of document.querySelectorAll('form')) form.reset();
   statusLine.textContent = 'Session cleared. Enter your token to continue.';
+  activateTab(tabs[0]);
   setBusy(false);
 }
 clear.addEventListener('click', resetSession);

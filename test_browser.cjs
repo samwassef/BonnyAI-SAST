@@ -75,6 +75,16 @@ async function main() {
       console.error(await evaluate(`JSON.stringify({url: location.href, body: document.body?.innerText.slice(0, 1500), ui: typeof window.RepositoryReviewUI})`));
       throw error;
     }
+    assert.equal(await evaluate(`document.querySelector('#panel-sast').hidden === false &&
+      document.querySelector('#panel-http').hidden && document.querySelector('#panel-chat').hidden`), true);
+    await evaluate(`document.querySelector('#hf-token').value = 'hf_browserFixture123';
+      document.querySelector('#tab-http').click()`);
+    assert.equal(await evaluate(`document.querySelector('#panel-http').hidden === false &&
+      document.querySelector('#panel-sast').hidden && document.querySelector('#hf-token').value === 'hf_browserFixture123'`), true);
+    await evaluate(`document.querySelector('#tab-http').dispatchEvent(new KeyboardEvent('keydown', {key:'ArrowRight', bubbles:true}))`);
+    assert.equal(await evaluate(`document.querySelector('#panel-chat').hidden === false &&
+      document.activeElement.id === 'tab-chat' && document.querySelector('#hf-access').hidden === false`), true);
+    await evaluate(`document.querySelector('#tab-sast').click()`);
     async function scan(repo, expectProgress = true) {
       await evaluate(`document.querySelector('#repository-url').value = ${JSON.stringify(`https://github.com/example/${repo}`)};
         document.querySelector('#repository-ref').value = 'feature/security';
@@ -118,6 +128,8 @@ async function main() {
     assert.equal(await evaluate(`document.querySelector('#repository-status').textContent`), 'Fixture collection failure.');
     await send('Emulation.setDeviceMetricsOverride', {width: 390, height: 844, deviceScaleFactor: 1, mobile: true});
     await scan('full-python');
+    assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), true);
+    await evaluate(`document.querySelector('#tab-chat').click()`);
     assert.equal(await evaluate(`document.documentElement.scrollWidth <= window.innerWidth`), true);
     await evaluate(`document.querySelector('#clear').click()`);
     assert.equal(await evaluate(`document.querySelector('#repository-result').textContent`), '');

@@ -30,8 +30,12 @@ class APITests(unittest.TestCase):
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
         self.assertIn("GLM Chat", response.text)
+        self.assertEqual(response.text.count('role="tab"'), 3)
+        self.assertLess(response.text.index('id="hf-token"'), response.text.index('id="workspace-tabs"'))
+        for panel in ('panel-sast', 'panel-http', 'panel-chat'):
+            self.assertIn(f'id="{panel}"', response.text)
         self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
-        for asset in ("chat.js", "style.css"):
+        for asset in ("chat.js", "style.css", "review-ui.js"):
             self.assertEqual(self.client.get("/static/" + asset).status_code, 200)
 
     # Regression check: conversation passed to service.

@@ -7,6 +7,9 @@ Providers, served by FastAPI on AWS Lightsail.
 Open it directly in your browser and enter your own Hugging Face token. No SSH
 tunnel, local server, registration, or domain purchase is required. Reports remain
 in the page until cleared, refreshed, or closed; download any report you want to keep.
+The token field stays above three workspace tabs: **SAST scanning** for GitHub source
+reviews, **HTTP analysis** for a webpage response, and **General chat**. Switching
+tabs keeps each tab's in-page results and uses the same token field.
 
 See [architecture and deployment steps](#aws-lightsail-test-deployment).
 The original terminal-token local mode remains available for development.
@@ -14,7 +17,7 @@ The original terminal-token local mode remains available for development.
 ## Analyze a webpage (Step 3)
 
 Restart the server after updating dependencies with the commands below. In the
-**Analyze a webpage** form, enter an HTTP(S) URL and your question, then click
+**HTTP analysis** tab, enter an HTTP(S) URL and your question, then click
 **Fetch and analyze**. Python collects the response and sends it to GLM-5.3 through
 Hugging Face. The result shows the final URL, HTTP status, number of responses,
 body byte count, and model analysis. This analysis is separate from chat history;

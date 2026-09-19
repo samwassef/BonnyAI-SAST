@@ -12,13 +12,19 @@
   <main>
     <header><div><p class="eyebrow">YOUR AI WORKSPACE</p><h1>GLM Chat<span>5.3</span></h1></div>
       <button id="clear" type="button" class="secondary">Clear session</button></header>
-    <p class="intro">A space to ask, explore, and work through ideas.</p>
-    <section aria-label="Hugging Face access">
+    <p class="intro">Scan source code, inspect HTTP responses, or chat with GLM.</p>
+    <section id="hf-access" aria-label="Hugging Face access">
       <label for="hf-token">Your Hugging Face token</label>
       <input id="hf-token" type="password" maxlength="203" autocomplete="off" spellcheck="false" placeholder="hf_?">
       <p><small>No registration. Your token stays in this page and is sent securely with each operation. It needs Inference Providers permission and uses your provider credits. Reports are not saved by this app: download before closing or refreshing. Local terminal-token mode can leave this field empty.</small></p>
       <button id="cancel" type="button" class="secondary" hidden>Cancel operation</button>
     </section>
+    <nav id="workspace-tabs" role="tablist" aria-label="Workspace tools">
+      <button id="tab-sast" type="button" role="tab" aria-controls="panel-sast" aria-selected="true" tabindex="0">SAST scanning</button>
+      <button id="tab-http" type="button" role="tab" aria-controls="panel-http" aria-selected="false" tabindex="-1">HTTP analysis</button>
+      <button id="tab-chat" type="button" role="tab" aria-controls="panel-chat" aria-selected="false" tabindex="-1">General chat</button>
+    </nav>
+    <section id="panel-sast" class="tab-panel" role="tabpanel" aria-labelledby="tab-sast">
     <form id="repository-form">
       <h2>Review GitHub source code</h2>
       <p>Scan any public GitHub repository and read the security findings here.</p>
@@ -33,6 +39,8 @@
       <div id="repository-progress" hidden aria-label="Scan progress"></div>
       <section id="repository-result" aria-label="Repository security review" aria-busy="false"></section>
     </form>
+    </section>
+    <section id="panel-http" class="tab-panel" role="tabpanel" aria-labelledby="tab-http" hidden>
     <form id="analysis-form">
       <h2>Analyze a webpage</h2>
       <label for="target-url">Website URL</label>
@@ -44,6 +52,8 @@
       <p id="analysis-status" role="status" aria-live="polite"></p>
       <pre id="analysis-result" aria-label="Webpage analysis"></pre>
     </form>
+    </section>
+    <section id="panel-chat" class="tab-panel" role="tabpanel" aria-labelledby="tab-chat" hidden>
     <section id="messages" role="log" aria-label="Conversation" aria-live="polite">
       <div id="welcome"><h2>What’s on your mind?</h2><p>Ask a question to start a conversation.</p></div>
     </section>
@@ -53,6 +63,7 @@
       <textarea id="prompt" rows="3" maxlength="20000" placeholder="Type your question…" required></textarea>
       <div class="actions"><small>Enter to send · Shift+Enter for a new line</small><button id="send" type="submit">Send message</button></div>
     </form>
+    </section>
     <footer>Messages and collected responses are sent to Hugging Face and your configured inference provider. History stays in this tab until refresh or Clear session. URL analysis is independent of chat history.</footer>
   </main>
 </body>

@@ -362,13 +362,16 @@ code blocks, and collapsible coverage inventories. Counts are calculated by Pyth
 
 This is a bounded static review: up to 400 source download attempts, 30000 bytes per
 file, and 1200000 collected source bytes overall. Source is reviewed in up to 24
-batches, each bounded to 80000 source bytes and 140000 serialized input characters.
+batches, each bounded to 32000 source bytes and 60000 serialized input characters.
 Primary files occupy roughly three quarters of each batch, reserving space for
 referenced helpers and security context. Files stay adjacent by directory where
 possible; context uses lexical symbol matching, not a language-aware call graph.
 Every primary file receives its own review even if used as context in another batch.
-Batch progress is displayed in the page. Up to 24 provider requests can consume
-credits per scan; larger scans can take many minutes. Files that do not
+Batch progress is displayed in the page. Each batch makes one provider request and
+retries once after a timeout, rate limit, connection failure, or provider HTTP 5xx.
+This permits up to 48 requests for 24 batches and can consume additional credits;
+larger scans can take many minutes. Authentication, billing, and permission failures
+are not retried. Files that do not
 fit are listed as skipped, without truncating file contents. Dependency/build
 folders, recognized lockfiles, minified files, symlinks, binary/non-UTF-8 files, and
 unsupported extensions are skipped. File-list metadata over 10 MB, more than 100000 entries, or a truncated
@@ -377,7 +380,9 @@ GitHub file list fail explicitly before inference. The collection budget is
 an in-flight operation may exceed the budget. The review uses an 8192-token output
 budget and the existing 90-second provider timeout per batch. Truncated or invalid
 structured answers are recorded as failed batches, never clean scans; unvalidated
-output is not rendered as findings. Provider errors stop subsequent requests and
+output is not rendered as findings. After a provider failure, the report records a
+safe category (timeout, HTTP status class, or connection failure) without provider
+response bodies, tokens, or source contents. Provider errors stop subsequent requests and
 preserve already validated findings. Duplicates with identical root causes and source
 locations are collapsed. Files are counted as reviewed only after their primary batch
 returns a complete validated response. Skipped files or failed batches make coverage

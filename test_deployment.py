@@ -93,7 +93,7 @@ class DeploymentTests(unittest.TestCase):
 
     def test_stream_delivers_validated_partial_report_before_final_failure(self):
         evidence = RepositoryEvidence('https://github.com/o/r', 'a' * 40,
-            [{'path': f'src/{n}.py', 'content': 'x\n' * 15000} for n in range(4)], [])
+            [{'path': f'src/{n}.py', 'content': 'x\n' * 5000} for n in range(4)], [])
         collector = Mock()
         collector.fetch.return_value = evidence
         client = self.client(HFChat, repository_fetcher=collector)

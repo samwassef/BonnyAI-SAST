@@ -26,7 +26,7 @@
       <input id="repository-url" type="url" maxlength="2048" placeholder="https://github.com/owner/repository" required>
       <label for="repository-ref">Branch, tag, or commit (optional)</label>
       <input id="repository-ref" maxlength="200" placeholder="Default branch">
-      <p><small>Application source is prioritized over tests and reviewed in related batches, with evidence and proposed fixes. Up to 24 model requests may be made per scan, using provider credits, and larger reviews can take several minutes. Source files are sent to Hugging Face and your GLM provider. Pipeline, Docker, build, configuration, and documentation files are excluded. The report shows actual coverage, skipped files, and failed batches. Code is never executed or modified.</small></p>
+      <p><small>Application source is prioritized over tests and reviewed in related batches, with evidence and proposed fixes. Up to 24 batches may make 48 model requests if transient failures are retried once, using provider credits; larger reviews can take several minutes. Source files are sent to Hugging Face and your GLM provider. Pipeline, Docker, build, configuration, and documentation files are excluded. The report shows actual coverage, skipped files, and failed batches. Code is never executed or modified.</small></p>
       <button id="review-repository" type="submit">Scan repository</button>
       <button id="download-report" class="secondary" type="button" hidden>Download HTML report</button>
       <p id="repository-status" role="status" aria-live="polite"></p>

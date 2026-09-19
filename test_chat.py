@@ -2,6 +2,7 @@
 
 # Test tools and application objects; external services are replaced with mocks.
 import unittest
+import httpx
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -101,6 +102,27 @@ class ProviderTests(unittest.TestCase):
                 HFChat("test-credential").reply(ChatRequest.model_validate(
                     {"messages": [{"role": "user", "content": "Hi"}]}))
             self.assertNotIn("secret", str(error.exception))
+
+    def test_timeout_is_classified_without_provider_details(self):
+        with patch("app.chat.InferenceClient") as factory:
+            factory.return_value.__enter__.return_value.chat_completion.side_effect = httpx.ReadTimeout("secret request")
+            with self.assertRaises(ChatError) as error:
+                HFChat("test-credential").reply(ChatRequest.model_validate(
+                    {"messages": [{"role": "user", "content": "Hi"}]}))
+            self.assertEqual(error.exception.category, 'timeout')
+            self.assertTrue(error.exception.retryable)
+            self.assertNotIn('secret', str(error.exception))
+
+    def test_billing_error_is_not_retryable(self):
+        failure = RuntimeError('secret provider payload')
+        failure.response = SimpleNamespace(status_code=402)
+        with patch("app.chat.InferenceClient") as factory:
+            factory.return_value.__enter__.return_value.chat_completion.side_effect = failure
+            with self.assertRaises(ChatError) as error:
+                HFChat("test-credential").reply(ChatRequest.model_validate(
+                    {"messages": [{"role": "user", "content": "Hi"}]}))
+            self.assertEqual(error.exception.category, 'billing')
+            self.assertFalse(error.exception.retryable)
 
 
 # Run this entry point only when invoked directly, not when imported.

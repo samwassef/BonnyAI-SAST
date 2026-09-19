@@ -3,6 +3,9 @@
 # Imports used by the request models, services, and helpers below.
 from typing import Literal
 import json
+from time import sleep
+
+import httpx
 
 from app.operation import checkpoint
 from dataclasses import asdict
@@ -53,6 +56,11 @@ class ChatReply(BaseModel):
 # Represent provider failures that are safe to display to the user.
 class ChatError(Exception):
     """Safe user-facing failure without provider response details."""
+
+    def __init__(self, message: str, category: str = 'provider_error', retryable: bool = False):
+        super().__init__(message)
+        self.category = category
+        self.retryable = retryable
 
 
 # Keep provider credentials on the server and share inference logic across features.
@@ -116,10 +124,15 @@ class HFChat:
     # Ask for evidence-backed vulnerabilities and proposed fixes using untrusted source data.
     def review_repository(self, evidence, progress=None) -> ChatReply:
         def request_batch(batch):
-            try:
-                return self._review_batch(evidence, batch)
-            except ChatError:
-                raise RuntimeError('Provider request failed') from None
+            for attempt in range(2):
+                try:
+                    return self._review_batch(evidence, batch)
+                except ChatError as exc:
+                    if attempt == 0 and exc.retryable:
+                        checkpoint()
+                        sleep(1)
+                        continue
+                    raise RuntimeError(exc.category) from None
 
         review = run_review(evidence, request_batch, progress)
         return ChatReply(answer=review_text(review),
@@ -233,10 +246,18 @@ class HFChat:
         except Exception as exc:
             # Map provider status codes to safe messages instead of exposing response bodies.
             status = getattr(getattr(exc, "response", None), "status_code", None)
-            message = {
-                401: "Token rejected. Enter a valid Hugging Face token.",
-                402: "Hugging Face inference credits or billing are required.",
-                403: "Access denied. Check your token's Inference Providers permission.",
-                429: "Provider rate limit reached. Wait before trying again.",
-            }.get(status, "The provider could not complete the request. Check connectivity and try again.")
-            raise ChatError(message) from None
+            if status == 401:
+                raise ChatError("Token rejected. Enter a valid Hugging Face token.", 'authentication') from None
+            if status == 402:
+                raise ChatError("Hugging Face inference credits or billing are required.", 'billing') from None
+            if status == 403:
+                raise ChatError("Access denied. Check your token's Inference Providers permission.", 'permission') from None
+            if status == 429:
+                raise ChatError("Provider rate limit reached. Wait before trying again.", 'rate_limit', True) from None
+            if isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+                raise ChatError("Provider request timed out.", 'timeout', True) from None
+            if isinstance(exc, (ConnectionError, httpx.NetworkError)):
+                raise ChatError("Provider connection failed.", 'connection', True) from None
+            if isinstance(status, int) and 500 <= status <= 599:
+                raise ChatError("Provider server error.", 'server_error', True) from None
+            raise ChatError("The provider could not complete the request. Check connectivity and try again.") from None

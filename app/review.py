@@ -75,7 +75,7 @@ def batch_payload(evidence, batch: ReviewBatch) -> str:
                        "files": batch.files}, ensure_ascii=False)
 
 
-def plan_batches(evidence, max_batches=24, max_bytes=80000, max_chars=140000):
+def plan_batches(evidence, max_batches=24, max_bytes=32000, max_chars=60000):
     """Keep directories adjacent and add bounded referenced/global security context.
 
     This is lexical dependency matching, not language-aware call-graph analysis.
@@ -194,7 +194,17 @@ def run_review(evidence, request_batch, progress=None):
             result = validate_batch(response.answer, batch)
         except (ValueError, RuntimeError) as exc:
             # Never expose raw model output or validation errors containing source/secrets.
-            reason = 'incomplete or invalid structured response' if isinstance(exc, ValueError) else 'provider request failed'
+            safe_reasons = {
+                'timeout': 'provider request timed out',
+                'rate_limit': 'provider rate limit (HTTP 429)',
+                'connection': 'provider connection failed',
+                'server_error': 'provider server error (HTTP 5xx)',
+                'authentication': 'provider authentication failed (HTTP 401)',
+                'billing': 'provider billing or credits required (HTTP 402)',
+                'permission': 'provider access denied (HTTP 403)',
+            }
+            reason = ('incomplete or invalid structured response' if isinstance(exc, ValueError)
+                      else safe_reasons.get(str(exc), 'provider request failed'))
             failures.append({'batch': index, 'reason': reason})
             omitted.extend({'path': p, 'reason': reason} for p in batch.primary_paths)
             if isinstance(exc, RuntimeError):

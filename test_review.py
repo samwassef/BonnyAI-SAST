@@ -49,12 +49,21 @@ class BatchTests(unittest.TestCase):
                  {'path': 'src/services/Service.py', 'content': 'def run(): pass\n'},
                  {'path': 'src/other.py', 'content': '# other\n' * 4000}]
         evidence = self.evidence(files)
-        batches, omitted = plan_batches(evidence)
+        batches, omitted = plan_batches(evidence, max_bytes=80000, max_chars=140000)
         self.assertGreater(len(batches), 1)
         self.assertFalse(omitted)
         self.assertEqual(sorted(p for b in batches for p in b.primary_paths), sorted(f['path'] for f in files))
         route_batch = next(b for b in batches if files[0]['path'] in b.primary_paths)
         self.assertIn('src/services/Service.py', [f['path'] for f in route_batch.files])
+
+    def test_default_batch_size_keeps_all_small_source_files(self):
+        files = [{'path': f'src/module_{n}.py', 'content': 'x' * 10000} for n in range(8)]
+        batches, omitted = plan_batches(self.evidence(files))
+        self.assertFalse(omitted)
+        self.assertEqual({p for batch in batches for p in batch.primary_paths},
+                         {f['path'] for f in files})
+        self.assertTrue(all(sum(len(f['content'].encode()) for f in batch.files) <= 32000
+                            for batch in batches))
 
     def test_serialized_escaping_and_batch_limit_are_accounted_for(self):
         evidence = self.evidence([{'path': f'src/{n}.py', 'content': '\x01' * 29000} for n in range(3)])
@@ -62,7 +71,7 @@ class BatchTests(unittest.TestCase):
         self.assertFalse(batches)
         self.assertEqual(len(omitted), 3)
         evidence = self.evidence([{'path': f'src/{n}.py', 'content': 'x' * 30000} for n in range(6)])
-        batches, omitted = plan_batches(evidence, max_batches=1)
+        batches, omitted = plan_batches(evidence, max_batches=1, max_bytes=80000, max_chars=140000)
         self.assertEqual(len(batches), 1)
         self.assertEqual(len(omitted), 4)
 
@@ -88,7 +97,8 @@ class BatchTests(unittest.TestCase):
         evidence = self.evidence([{'path': f'src/{n}.py', 'content': 'x\n' * 15000} for n in range(6)])
         request = Mock(side_effect=[response([finding(path='src/0.py')]), RuntimeError('sensitive provider data')])
         progress = Mock()
-        result = run_review(evidence, request, progress)
+        with patch('app.review.plan_batches', side_effect=lambda value: plan_batches(value, max_bytes=80000, max_chars=140000)):
+            result = run_review(evidence, request, progress)
         self.assertEqual(len(result['reviewed_paths']), 2)
         self.assertEqual(len(result['findings']), 1)
         self.assertEqual(len(result['skipped']), 4)
@@ -128,6 +138,30 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(answer.finish_reason, 'incomplete')
         self.assertEqual(answer.review['reviewed_paths'], [])
         self.assertEqual(len(answer.review['skipped']), 1)
+
+    def test_retry_transient_provider_error_once_then_report_safe_category(self):
+        evidence = self.evidence([{'path': 'src/routes.py', 'content': 'pass\n'}])
+        with patch.object(HFChat, '_review_batch', side_effect=[
+                ChatError('secret timeout detail', 'timeout', True), response()]):
+            with patch('app.chat.sleep') as pause:
+                answer = HFChat('fake').review_repository(evidence)
+        self.assertEqual(answer.review['reviewed_paths'], ['src/routes.py'])
+        self.assertEqual(answer.review['failed_batches'], [])
+        pause.assert_called_once_with(1)
+
+        with patch.object(HFChat, '_review_batch', side_effect=ChatError('secret billing detail', 'billing')) as request:
+            answer = HFChat('fake').review_repository(evidence)
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(answer.review['failed_batches'][0]['reason'], 'provider billing or credits required (HTTP 402)')
+        self.assertNotIn('secret', json.dumps(answer.review))
+
+        with patch.object(HFChat, '_review_batch', side_effect=ChatError('secret timeout detail', 'timeout', True)) as request:
+            with patch('app.chat.sleep'):
+                answer = HFChat('fake').review_repository(evidence)
+        self.assertEqual(request.call_count, 2)
+        self.assertEqual(answer.review['reviewed_paths'], [])
+        self.assertEqual(answer.review['failed_batches'][0]['reason'], 'provider request timed out')
+        self.assertNotIn('secret', json.dumps(answer.review))
 
     def test_no_progress_retrieval_and_api_uses_actual_reviewed_counts(self):
         evidence = self.evidence([{'path': 'src/routes.py', 'content': 'pass\n'}])

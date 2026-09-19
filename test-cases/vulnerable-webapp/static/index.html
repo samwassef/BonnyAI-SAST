@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Deliberately vulnerable web app</title>
+  <style>
+    body {font:17px system-ui; max-width:850px; margin:40px auto; padding:0 20px; line-height:1.6}
+    li {margin:12px 0} code {background:#eee;padding:4px} .notice {color:#9b2500}
+  </style>
+</head>
+<body>
+  <h1>Deliberately vulnerable web app</h1>
+  <p class="notice">Local training fixture. All accounts, credentials and records are synthetic.</p>
+  <p>This application intentionally contains six security issues. Changes last only until restart.</p>
+  <ol>
+    <li><a href="/search?q=hello">XSS: reflected search input</a></li>
+    <li><a href="{{ATTACKER_ORIGIN}}/csrf">CSRF: forged account email update</a> (log in first)</li>
+    <li><a href="{{ATTACKER_ORIGIN}}/clickjacking">Clickjacking: disguised newsletter action</a> (log in first)</li>
+    <li><a href="/products?category=office">SQL injection: product category filter</a></li>
+    <li><a href="/login">Hardcoded credentials: admin login</a> — <code>admin / LabOnly123!</code></li>
+    <li>Sensitive comments: inspect this page's HTML source.</li>
+  </ol>
+  <p><a href="/account">Account and reset controls</a> · <a href="{{ATTACKER_ORIGIN}}/">Attacker demonstrations</a></p>
+  <!-- VULN-06: Internal notes accidentally delivered to every visitor.
+       Legacy lab administrator: admin / LabOnly123!
+       Synthetic staging reset token: DEMO-RESET-TOKEN-DO-NOT-USE
+       Internal backup location: /internal/backups/payroll-demo.csv
+       Internal ticket: DEMO-142, remove the temporary administrator before launch.
+       The path and reset token are fictional; the lab login above really works.
+  -->
+</body>
+</html>

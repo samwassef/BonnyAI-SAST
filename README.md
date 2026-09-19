@@ -410,6 +410,11 @@ or external requests. They validate the interface, not live vulnerability detect
 
 ### Evaluate detection with GLM
 
+For a runnable target with six intentional vulnerabilities, see the
+[test-cases web application](test-cases/vulnerable-webapp/README.md). It includes
+XSS, CSRF, clickjacking, SQL injection, hardcoded credentials and sensitive comments,
+plus local attacker demonstrations. It is excluded from the AWS application image.
+
 The opt-in evaluation uses eight synthetic source fixtures: vulnerable and mitigated
 examples of SQLi, XSS, access control, and credentials. It checks the expected category
 and false positives for each paired control. These are live model evaluations, separate

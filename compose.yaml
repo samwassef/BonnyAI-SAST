@@ -1,0 +1,55 @@
+services:
+  app:
+    build: .
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 1g
+    memswap_limit: 1g
+    pids_limit: 128
+    ulimits:
+      core: 0
+    stop_grace_period: 110s
+    logging:
+      driver: none
+    healthcheck:
+      test: [CMD, python, -c, "import os,urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/healthz',headers={'Host':os.environ['APP_DOMAIN']}); urllib.request.urlopen(r,timeout=5).close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    tmpfs:
+      - /config:size=16m,noexec,nosuid
+      - /tmp:size=16m,noexec,nosuid
+    read_only: true
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 128
+    ulimits:
+      core: 0
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: none
+    depends_on:
+      app:
+        condition: service_healthy
+
+volumes:
+  caddy_data:

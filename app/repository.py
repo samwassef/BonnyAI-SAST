@@ -5,6 +5,8 @@ import http.client
 import json
 import re
 import time
+
+from app.operation import checkpoint
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html import escape
@@ -96,6 +98,7 @@ class RepositoryFetcher:
             if (parts.scheme != "https" or parts.netloc not in {"api.github.com", "raw.githubusercontent.com"}
                     or any(ord(c) <= 32 for c in url) or "\\" in url):
                 raise FetchError("GitHub returned an unsupported download destination.")
+            checkpoint()
             if time.monotonic() > deadline:
                 raise FetchError("Repository collection timed out.")
             connection = PinnedConnection(parts.hostname, 443, resolve(parts.hostname)[0], True)
@@ -113,6 +116,7 @@ class RepositoryFetcher:
                 # Stream the response and stop once its specific byte budget is exceeded.
                 body = bytearray()
                 while True:
+                    checkpoint()
                     if time.monotonic() > deadline:
                         raise FetchError("Repository collection timed out.")
                     chunk = response.read1(min(65536, limit - len(body) + 1))
@@ -165,6 +169,7 @@ class RepositoryFetcher:
         # Reject ambiguous paths and duplicates before constructing raw-content URLs.
         seen = set()
         for item in entries:
+            checkpoint()
             path = item["path"]
             if (not isinstance(path, str) or "\\" in path or any(ord(c) < 32 for c in path)
                     or any(p in ("", ".", "..") for p in path.split("/")) or path in seen):
@@ -183,6 +188,7 @@ class RepositoryFetcher:
         attempts = 0
         # Application code precedes tests/tooling; adjacent packages stay together.
         for item in sorted(entries, key=lambda i: source_priority(i["path"])):
+            checkpoint()
             if item["type"] == "tree":
                 continue
             path = item["path"]

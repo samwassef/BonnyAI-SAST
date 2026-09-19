@@ -129,19 +129,19 @@ class BatchTests(unittest.TestCase):
         self.assertEqual(answer.review['reviewed_paths'], [])
         self.assertEqual(len(answer.review['skipped']), 1)
 
-    def test_progress_endpoint_and_api_use_actual_reviewed_counts(self):
+    def test_no_progress_retrieval_and_api_uses_actual_reviewed_counts(self):
         evidence = self.evidence([{'path': 'src/routes.py', 'content': 'pass\n'}])
         collector = Mock()
         collector.fetch.return_value = evidence
         client = TestClient(create_app(HFChat('fake'), repository_fetcher=collector), base_url='http://127.0.0.1:8000')
         headers = {'Origin': 'http://127.0.0.1:8000', 'X-Chat-Request': '1'}
-        self.assertEqual(client.get('/api/review-progress').status_code, 403)
+        self.assertEqual(client.get('/api/review-progress').status_code, 404)
         with patch.object(HFChat, '_complete', return_value=SimpleNamespace(answer='bad output', finish_reason='stop')):
             reply = client.post('/api/review-repository', json={'url': evidence.url}, headers=headers)
         self.assertEqual(reply.status_code, 200)
         self.assertEqual(reply.json()['reviewed_files'], 0)
         self.assertEqual(reply.json()['skipped_files'], 1)
-        self.assertIn('incomplete', client.get('/api/review-progress', headers=headers).json()['message'])
+        self.assertEqual(client.get('/api/review-progress', headers=headers).status_code, 404)
 
 
 if __name__ == '__main__':

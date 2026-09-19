@@ -10,9 +10,15 @@
 </head>
 <body>
   <main>
-    <header><div><p class="eyebrow">YOUR LOCAL AI WORKSPACE</p><h1>GLM Chat<span>5.3</span></h1></div>
-      <button id="clear" type="button" class="secondary">New chat</button></header>
+    <header><div><p class="eyebrow">YOUR AI WORKSPACE</p><h1>GLM Chat<span>5.3</span></h1></div>
+      <button id="clear" type="button" class="secondary">Clear session</button></header>
     <p class="intro">A space to ask, explore, and work through ideas.</p>
+    <section aria-label="Hugging Face access">
+      <label for="hf-token">Your Hugging Face token</label>
+      <input id="hf-token" type="password" maxlength="203" autocomplete="off" spellcheck="false" placeholder="hf_?">
+      <p><small>No registration. Your token stays in this page and is sent securely with each operation. It needs Inference Providers permission and uses your provider credits. Reports are not saved by this app: download before closing or refreshing. Local terminal-token mode can leave this field empty.</small></p>
+      <button id="cancel" type="button" class="secondary" hidden>Cancel operation</button>
+    </section>
     <form id="repository-form">
       <h2>Review GitHub source code</h2>
       <p>Scan any public GitHub repository and read the security findings here.</p>
@@ -47,7 +53,7 @@
       <textarea id="prompt" rows="3" maxlength="20000" placeholder="Type your question…" required></textarea>
       <div class="actions"><small>Enter to send · Shift+Enter for a new line</small><button id="send" type="submit">Send message</button></div>
     </form>
-    <footer>Messages and collected responses are sent to Hugging Face and your configured inference provider. History stays in this tab until refresh or New chat. URL analysis is independent of chat history.</footer>
+    <footer>Messages and collected responses are sent to Hugging Face and your configured inference provider. History stays in this tab until refresh or Clear session. URL analysis is independent of chat history.</footer>
   </main>
 </body>
 </html>

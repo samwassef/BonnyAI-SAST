@@ -5,6 +5,11 @@ Step 1 connectivity was confirmed by the user's successful Novita response. Step
 adds the chat interface and bounded conversation history. Step 3 adds HTTP GET
 collection and analysis of response headers and HTML.
 
+The AWS test deployment uses one Lightsail server and visitor-supplied HF tokens.
+See [architecture and deployment steps](#aws-lightsail-test-deployment).
+Without a domain, use the SSH tunnel setup below. The original terminal-token
+local mode remains available.
+
 ## Analyze a webpage (Step 3)
 
 Restart the server after updating dependencies with the commands below. In the
@@ -79,13 +84,11 @@ answers. It permits 10 previous exchanges, 20000 characters per message and 4000
 characters total; start a new chat when these limits are reached. Character bounds
 are conservative application limits, not an exact tokenizer/context calculation.
 
-This is a single-user local application, bound to `127.0.0.1`. Host and Origin
-checks protect the local endpoint from unrelated websites; it is not a public,
-authenticated deployment. The server accepts one inference request at a time,
-disables access logging, sanitizes provider failures, and never executes model text.
-Do not expose it using a tunnel or reverse proxy without adding authentication and
-deployment-specific controls. Only the Python collector fetches the explicitly
-submitted URL; the LLM cannot browse URLs or execute tools.
+`run_chat.py` is the original single-user, loopback-only mode with a terminal token.
+For visitor tokens on localhost, run `.venv/Scripts/python.exe run_server.py --local`.
+For the AWS container entry point, use the deployment instructions below. Host and
+Origin checks, a single-operation limit, sanitized errors, and escaped output apply
+in all modes. Only the Python collector fetches submitted targets; GLM has no tools.
 
 ## Offline tests
 
@@ -96,6 +99,132 @@ submitted URL; the LLM cannot browse URLs or execute tools.
 Tests mock inference and cover the original checker, chat history validation,
 static assets, source checks, body size limits, provider errors and token redaction.
 No real tokens or external inference calls are used by the tests.
+
+## AWS Lightsail test deployment
+
+One Ubuntu 24.04 Lightsail instance in `us-east-1`, using the public IPv4 2 GB / 2 vCPU
+bundle (`small_3_0`, USD 12/month before taxes and excess usage). No NAT gateway,
+load balancer, registration, database, queues, or report bucket. Visitors pay their
+own Hugging Face inference charges. See [Lightsail pricing](https://aws.amazon.com/lightsail/pricing/).
+
+The current test setup has **no domain**. Its web port binds only to server loopback
+and is reached through an encrypted SSH tunnel. A separate optional configuration
+supports public HTTPS when a domain is available.
+
+### Architecture
+
+```mermaid
+flowchart LR
+    Browser["Browser: token, progress, findings"]
+    Tunnel["Local SSH tunnel: 127.0.0.1:8080"]
+    Download["HTML download on visitor device"]
+    subgraph AWS["One Lightsail Ubuntu server"]
+        SSH["SSH: port 22, administrative IP only"]
+        Caddy["Caddy: server loopback port 8080"]
+        App["FastAPI: internal Docker port 8000"]
+        SSH --> Caddy --> App
+    end
+    Browser <--> Tunnel <--> SSH
+    Browser --> Download
+    App --> GitHub["GitHub API / source"]
+    App --> Website["Submitted public website"]
+    App --> HF["Hugging Face / Novita / GLM"]
+```
+
+- Docker Compose runs one `app` process and `caddy`; both restart automatically.
+- The app accepts one operation at a time across GitHub scanning, HTTP inspection,
+  and chat. Other requests receive HTTP 429 with a server-busy message.
+- Visitors enter their own HF token in a masked field. Tokens travel in a request
+  header, never in URLs or prompts. Each operation creates its own inference client.
+- Tokens, conversation, source, findings and generated reports use memory only.
+  There is no history, job ID, progress lookup, report storage or retrieval API.
+  Browser refresh/close/Clear session discards results and tokens, including restored
+  history pages. Downloaded HTML remains on the visitor's device.
+- NDJSON events (`progress`, `snapshot`, `complete`, `error`, `heartbeat`) carry
+  request-local progress and validated partial reports over the same response.
+  Completed batches remain downloadable after cancellation or a later error.
+- A bounded event queue connects the worker to the response stream. Heartbeats
+  occur while idle; downloads and batch boundaries check cancellation and a
+  two-hour deadline. An in-flight HTTP/provider call may finish or time out first;
+  the busy slot remains held until its worker exits. Nothing resumes after restart.
+- App filesystem is read-only, temporary filesystems are memory-backed, and Docker
+  logs are disabled for both services. Host bootstrap disables swap and core dumps.
+  Caddy also discards its logs, so request headers cannot enter proxy logs.
+- Source limits, provider timeouts, source citation validation, HTML escaping, and
+  blocking of private/cloud metadata destinations remain in place.
+
+### Deployment without a domain (current mode)
+
+1. Create the Ubuntu instance and attach a static IP. Use a distinct name for the
+   instance and SSH key pair (Lightsail resource names share a namespace).
+   Set its firewall to TCP 22 from your administrative public IP only. Leave
+   TCP 80, 443, 8000 and 8080 closed publicly.
+2. Supply `deploy/bootstrap.sh` as Lightsail user data, or copy it to the server
+   and run `sudo sh deploy/bootstrap.sh`. It installs Git and Docker Engine/Compose
+   using [Docker's Ubuntu repository](https://docs.docker.com/engine/install/ubuntu/).
+   The script is POSIX-compatible because Lightsail wraps user data in `/bin/sh`.
+3. Copy the implementation branch to the server (clone directly if the repository
+   is publicly readable, or upload a Git archive from your authenticated checkout).
+   Never copy `.env`, SSH/AWS credentials, `.venv` or local reports.
+4. In the server's repository directory, run:
+
+   ```bash
+   sudo docker compose -f compose.yaml -f compose.tunnel.yaml config --quiet
+   sudo docker compose -f compose.yaml -f compose.tunnel.yaml up -d --build
+   sudo docker compose -f compose.yaml -f compose.tunnel.yaml ps
+   curl --fail http://127.0.0.1:8080/healthz
+   ```
+
+   Compose 2.24.4+ is required for the port/volume overrides. No `.env` or shared
+   `HF_TOKEN` is required. This mode creates no persistent application data volume.
+5. On your computer, keep this tunnel command running, substituting the actual
+   private-key path and static IP:
+
+   ```powershell
+   ssh -i "$env:USERPROFILE\.ssh\bonnyai-lightsail.pem" -N -L 127.0.0.1:8080:127.0.0.1:8080 -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 ubuntu@LIGHTSAIL_STATIC_IP
+   ```
+
+6. Open **http://127.0.0.1:8080**, enter your HF token, and use the web interface.
+   SSH encrypts the connection to AWS. The server cannot be opened directly by its
+   public IP. If your public IP changes, update the Lightsail SSH firewall rule.
+
+### Optional public HTTPS when a domain is available
+
+Point a DNS A record to the static IP, open TCP 80/443, and keep SSH restricted.
+Copy `.env.example` to `.env`, setting `APP_DOMAIN` to a lowercase DNS hostname
+without a scheme, path or port. Do not add HF tokens to the file.
+
+Switch configurations by stopping the tunnel stack first:
+
+```bash
+sudo docker compose -f compose.yaml -f compose.tunnel.yaml down
+sudo docker compose config --quiet
+sudo docker compose up -d --build
+sudo docker compose ps
+```
+
+Caddy obtains/renews TLS certificates and persists them in `caddy_data`. Only Caddy
+publishes 80/443; app port 8000 stays internal. Plain HTTP API submissions are
+rejected; GET/HEAD requests redirect to HTTPS. Caddy requires working DNS and
+reachable challenge ports; see [automatic HTTPS](https://caddyserver.com/docs/automatic-https).
+The app fails startup without `APP_DOMAIN` in public mode. Run a single process;
+multiple processes would each have a separate busy lock.
+
+### Updates and checks
+
+Wait for any active operation to finish, update the checkout/archive, and rerun the
+same Compose build command for the selected mode. For a Git clone, first run
+`git pull --ff-only origin feature/aws-test-deployment`. Container/server restart
+interrupts scans; visitors must resubmit them.
+
+Offline verification: `.venv/Scripts/python.exe -m unittest -q` and
+`node test_browser.cjs`. Tests use simulated providers and repositories and cover
+visitor token isolation, same-origin restrictions, streaming partial reports,
+busy-slot release, deadlines, cancellation, rendering, download and page cleanup.
+Live inference requires a visitor's funded HF token; offline tests do not establish
+model detection accuracy. Check container health and `/healthz` after deployment.
+For startup diagnosis, use `docker compose ps` and `docker inspect`; persistent
+application/proxy logs are intentionally disabled.
 
 ## Setup (Python 3.12+)
 
@@ -128,7 +257,7 @@ does not imply the model completed its answer.
 
 The user verified the connection checker with `Connection successful` and finish
 reason `stop` through Novita. The new web chat is tested offline; its live inference
-must be exercised after entering a token when starting the server.
+must be exercised with a visitor token in the browser (or a terminal token in local mode).
 
 References: [GLM-5.3](https://huggingface.co/zai-org/GLM-5.3),
 [Hugging Face chat completion](https://huggingface.co/docs/inference-providers/en/tasks/chat-completion).
@@ -203,7 +332,7 @@ installed, or fixes applied. Submodules and Git LFS contents are not fetched.
 Repository instructions are treated as untrusted input, and GLM has no tools.
 Source contents, including any embedded secrets, are sent to Hugging Face and the
 configured inference provider. The server does not persist source or reports;
-the generated report stays in tab memory until cleared/refreshed, and the download
+the generated report stays in tab memory until cleared/refreshed/closed, and the download
 saves it using your browser. Model output and filenames are HTML-escaped in the
 report. Findings and patches require human review; no findings does not prove
 that the repository is secure.
@@ -216,7 +345,7 @@ and recovery after failures. Live repository review with GLM has not been verifi
 Browser regression checks use simulated GitHub and model responses for Python,
 JavaScript, and Java repository layouts. Run `node test_browser.cjs` with Node 22+
 and Microsoft Edge installed (or set `BROWSER_PATH` to a Chromium executable).
-These exercise the page, progress polling, formatted findings, safe code display,
+These exercise the page, streamed progress, formatted findings, safe code display,
 download action, partial/empty/error states, reset, and mobile layout without tokens
 or external requests. They validate the interface, not live vulnerability detection.
 

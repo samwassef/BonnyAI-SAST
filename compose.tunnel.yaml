@@ -1,0 +1,14 @@
+# Apply with: docker compose -f compose.yaml -f compose.tunnel.yaml up -d --build
+# Requires Docker Compose 2.24.4+ for !override.
+services:
+  app:
+    command: [python, run_server.py, --tunnel-port, "8080"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; r=urllib.request.Request('http://127.0.0.1:8000/healthz',headers={'Host':'127.0.0.1:8080'}); urllib.request.urlopen(r,timeout=5).close()"]
+  caddy:
+    ports: !override
+      - "127.0.0.1:8080:8080"
+    volumes: !override
+      - ./Caddyfile.tunnel:/etc/caddy/Caddyfile:ro
+    tmpfs:
+      - /data:size=16m,noexec,nosuid

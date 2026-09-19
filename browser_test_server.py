@@ -29,7 +29,7 @@ class FixtureCollector:
 class FixtureChat(HFChat):
     def _complete(self, messages, max_tokens=2048):
         payload = json.loads(messages[-1]['content'])
-        time.sleep(1.7)  # Let the browser exercise real progress polling.
+        time.sleep(1.7)  # Let the browser exercise streamed progress and cancellation.
         name = payload['repository']
         path = payload['primary_paths'][0]
         if 'provider-error' in name:
@@ -52,5 +52,5 @@ class FixtureChat(HFChat):
 
 if __name__ == '__main__':
     port = int(sys.argv[1])
-    uvicorn.run(create_app(FixtureChat('fake-token'), port=port, repository_fetcher=FixtureCollector()),
+    uvicorn.run(create_app(port=port, client_factory=FixtureChat, repository_fetcher=FixtureCollector()),
                 host='127.0.0.1', port=port, access_log=False, log_level='error')

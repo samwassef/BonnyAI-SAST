@@ -1,0 +1,31 @@
+{
+    admin off
+    auto_https disable_redirects
+    log default {
+        output discard
+    }
+    servers {
+        timeouts {
+            read_header 10s
+            read_body 30s
+            idle 2m
+        }
+    }
+}
+
+# Never forward tokens submitted over plaintext HTTP.
+http://{$APP_DOMAIN} {
+    @read method GET HEAD
+    redir @read https://{$APP_DOMAIN}{uri} permanent
+    respond "Use HTTPS." 400
+}
+
+{$APP_DOMAIN} {
+    header Strict-Transport-Security "max-age=31536000"
+    request_body {
+        max_size 300KB
+    }
+    reverse_proxy app:8000 {
+        flush_interval 100ms
+    }
+}

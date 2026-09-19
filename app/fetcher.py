@@ -7,6 +7,8 @@ import re
 import socket
 import ssl
 import time
+
+from app.operation import checkpoint
 from dataclasses import dataclass
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
@@ -135,6 +137,7 @@ class HTTPFetcher:
                 current, host, port = parse_url(current)
                 if host != allowed_host:
                     raise FetchError("Redirect changes hostname. Submit the destination URL separately.")
+                checkpoint()
                 if time.monotonic() > deadline:
                     raise FetchError("Collection time limit exceeded.")
                 ips = resolve(host)  # Validate ALL answers before selecting one.
@@ -157,6 +160,7 @@ class HTTPFetcher:
                     # Read incrementally to enforce byte and elapsed-time limits.
                     body = bytearray()
                     while True:
+                        checkpoint()
                         if time.monotonic() > deadline:
                             raise FetchError("Collection time limit exceeded.")
                         chunk = response.read1(min(8192, self.MAX_BYTES - total + 1))

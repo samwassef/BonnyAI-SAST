@@ -1,0 +1,23 @@
+{
+    admin off
+    auto_https off
+    log default {
+        output discard
+    }
+    servers {
+        timeouts {
+            read_header 10s
+            read_body 30s
+            idle 2m
+        }
+    }
+}
+
+:8080 {
+    request_body {
+        max_size 300KB
+    }
+    reverse_proxy app:8000 {
+        flush_interval 100ms
+    }
+}

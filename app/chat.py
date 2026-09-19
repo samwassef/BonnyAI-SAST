@@ -3,6 +3,8 @@
 # Imports used by the request models, services, and helpers below.
 from typing import Literal
 import json
+
+from app.operation import checkpoint
 from dataclasses import asdict
 
 from huggingface_hub import InferenceClient
@@ -209,8 +211,9 @@ class HFChat:
 
     # Call the provider with bounded output, redact the token, and sanitize failures.
     def _complete(self, messages: list[dict[str, str]], max_tokens: int = 2048) -> ChatReply:
+        checkpoint()
         if not self._token:
-            raise ChatError("Restart with --prompt-token to configure Hugging Face access.")
+            raise ChatError("Enter your Hugging Face token to continue.")
         try:
             with InferenceClient(provider=self.provider, api_key=self._token, timeout=90) as client:
                 result = client.chat_completion(
@@ -231,7 +234,7 @@ class HFChat:
             # Map provider status codes to safe messages instead of exposing response bodies.
             status = getattr(getattr(exc, "response", None), "status_code", None)
             message = {
-                401: "Token rejected. Restart with a valid Hugging Face token.",
+                401: "Token rejected. Enter a valid Hugging Face token.",
                 402: "Hugging Face inference credits or billing are required.",
                 403: "Access denied. Check your token's Inference Providers permission.",
                 429: "Provider rate limit reached. Wait before trying again.",

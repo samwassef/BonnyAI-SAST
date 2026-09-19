@@ -10,6 +10,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.operation import checkpoint
+
 
 Text = Annotated[str, Field(min_length=1, max_length=16000)]
 
@@ -151,14 +153,36 @@ def run_review(evidence, request_batch, progress=None):
     batches, omitted = plan_batches(evidence)
     findings, completed, sent, failures, limitations = [], set(), set(), [], []
     successful = 0
-    def report_progress(index):
+    def snapshot(pending=False):
+        unique = {}
+        for finding in findings:
+            # Only collapse identical root causes at identical source locations.
+            key = (finding.category, finding.root_cause.strip().casefold(),
+                   tuple(sorted((r.path, r.start_line, r.end_line) for r in finding.evidence)))
+            if key not in unique or (unique[key].status != 'confirmed' and finding.status == 'confirmed'):
+                unique[key] = finding
+        severity = {name: i for i, name in enumerate(['Critical', 'High', 'Medium', 'Low', 'Informational'])}
+        results = sorted(unique.values(), key=lambda f: (f.status != 'confirmed', severity[f.severity], f.title))
+        skipped = evidence.skipped + omitted
+        if pending:
+            known = completed | {item['path'] for item in skipped}
+            skipped += [{'path': f['path'], 'reason': 'not yet reviewed'}
+                        for f in evidence.files if f['path'] not in known]
+        return {'findings': [f.model_dump() for f in results], 'limitations': list(dict.fromkeys(limitations)),
+                'reviewed_paths': sorted(completed), 'sent_paths': sorted(sent),
+                'skipped': skipped, 'planned_batches': len(batches), 'completed_batches': successful,
+                'failed_batches': failures, 'partial': bool(skipped or failures)}
+
+    def report_progress(index, publish=False):
+        checkpoint()
         if progress:
             progress({'phase': 'reviewing',
                       'message': f'Reviewing batch {index} of {len(batches)}.',
                       'collected_files': len(evidence.files), 'reviewed_files': len(completed),
                       'skipped_files': len(evidence.skipped) + len(omitted),
                       'current_batch': index, 'total_batches': len(batches),
-                      'completed_batches': successful, 'failed_batches': len(failures)})
+                      'completed_batches': successful, 'failed_batches': len(failures),
+                      **({'review': snapshot(pending=True)} if publish else {})})
 
     for index, batch in enumerate(batches, 1):
         report_progress(index)
@@ -176,29 +200,16 @@ def run_review(evidence, request_batch, progress=None):
             if isinstance(exc, RuntimeError):
                 for remaining in batches[index:]:
                     omitted.extend({'path': p, 'reason': 'not attempted after provider failure'} for p in remaining.primary_paths)
-                report_progress(index)
+                report_progress(index, publish=True)
                 break
-            report_progress(index)
+            report_progress(index, publish=True)
             continue
         successful += 1
         completed.update(batch.primary_paths)
         findings.extend(result.findings)
         limitations.extend(result.limitations)
-        report_progress(index)
-    unique = {}
-    for finding in findings:
-        # Only collapse identical root causes at identical source locations.
-        key = (finding.category, finding.root_cause.strip().casefold(),
-               tuple(sorted((r.path, r.start_line, r.end_line) for r in finding.evidence)))
-        if key not in unique or (unique[key].status != 'confirmed' and finding.status == 'confirmed'):
-            unique[key] = finding
-    severity = {name: i for i, name in enumerate(['Critical', 'High', 'Medium', 'Low', 'Informational'])}
-    results = sorted(unique.values(), key=lambda f: (f.status != 'confirmed', severity[f.severity], f.title))
-    skipped = evidence.skipped + omitted
-    return {'findings': [f.model_dump() for f in results], 'limitations': list(dict.fromkeys(limitations)),
-            'reviewed_paths': sorted(completed), 'sent_paths': sorted(sent),
-            'skipped': skipped, 'planned_batches': len(batches), 'completed_batches': successful,
-            'failed_batches': failures, 'partial': bool(skipped or failures)}
+        report_progress(index, publish=True)
+    return snapshot()
 
 
 def review_text(review: dict) -> str:

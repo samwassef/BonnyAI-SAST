@@ -78,6 +78,7 @@ async function main() {
     async function scan(repo, expectProgress = true) {
       await evaluate(`document.querySelector('#repository-url').value = ${JSON.stringify(`https://github.com/example/${repo}`)};
         document.querySelector('#repository-ref').value = 'feature/security';
+        document.querySelector('#hf-token').value = 'hf_browserFixture123';
         document.querySelector('#repository-form').requestSubmit();`);
       if (expectProgress) {
         await until(() => evaluate(`document.querySelector('#repository-progress').textContent.includes('Batch')`));
@@ -121,6 +122,19 @@ async function main() {
     await evaluate(`document.querySelector('#clear').click()`);
     assert.equal(await evaluate(`document.querySelector('#repository-result').textContent`), '');
     assert.equal(await evaluate(`document.querySelector('#download-report').hidden`), true);
+    assert.equal(await evaluate(`document.querySelector('#hf-token').value`), '');
+    assert.equal(await evaluate(`localStorage.length + sessionStorage.length`), 0);
+    await evaluate(`document.querySelector('#hf-token').value = 'hf_browserFixture123';
+      document.querySelector('#repository-url').value = 'https://github.com/example/full-python';
+      document.querySelector('#repository-form').requestSubmit();`);
+    await until(() => evaluate(`!document.querySelector('#download-report').hidden && busy`));
+    await evaluate(`document.querySelector('#cancel').click()`);
+    await until(() => evaluate(`!busy`));
+    assert.equal(await evaluate(`document.querySelector('#download-report').hidden`), false);
+    assert.ok((await evaluate(`document.querySelector('#repository-status').textContent`)).includes('Cancelled'));
+    // Page lifecycle discards the report and token, including history-cache restore.
+    await evaluate(`window.dispatchEvent(new PageTransitionEvent('pagehide'))`);
+    assert.equal(await evaluate(`repositoryReport === null && history.length === 0 && document.querySelector('#hf-token').value === ''`), true);
     console.log('Browser checks passed: progress, generic repositories, formatted findings, escaping, download, empty/partial/error states, mobile layout, and reset.');
     await send('Browser.close').catch(() => {});
   } finally {

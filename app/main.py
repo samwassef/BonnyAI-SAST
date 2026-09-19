@@ -1,7 +1,7 @@
-"""Serve a loopback-only chat UI with same-origin request checks."""
+"""Same-origin browser API with request-scoped credentials and results."""
 
-# Imports used by the request models, services, and helpers below.
 from pathlib import Path
+import re
 from threading import Lock
 
 from fastapi import FastAPI, Request
@@ -9,34 +9,33 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.chat import ChatError, ChatReply, ChatRequest, HFChat
+from app.chat import ChatRequest, HFChat, MODEL
 from app.analysis import AnalysisRequest
-from app.fetcher import HTTPFetcher, FetchError
+from app.fetcher import HTTPFetcher
+from app.operation import Operation, checkpoint
 from app.repository import RepositoryFetcher, RepositoryRequest, render_report
-from app.chat import MODEL
+from app.review import review_text
 
 
-# Build the web app, shared services, and local-browser access rules.
-def create_app(chat: HFChat, port: int = 8000, fetcher: HTTPFetcher | None = None,
-               repository_fetcher: RepositoryFetcher | None = None) -> FastAPI:
+def create_app(chat: HFChat | None = None, port: int = 8000,
+               fetcher: HTTPFetcher | None = None,
+               repository_fetcher: RepositoryFetcher | None = None,
+               domain: str | None = None, client_factory=HFChat) -> FastAPI:
+    if domain and chat is not None:
+        raise ValueError("Public deployments require visitor credentials")
+    if domain and (len(domain) > 253 or not re.fullmatch(
+            r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z](?:[a-z0-9-]{0,61}[a-z0-9])?", domain)):
+        raise ValueError("APP_DOMAIN must be a DNS hostname without a scheme, port or path")
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     static = Path(__file__).parent / "static"
-    # Share a single lock across chat, webpage analysis, and repository review.
     lock = Lock()
-    review_progress = {"message": "No review running."}
-    progress_lock = Lock()
-
-    def update_review_progress(value):
-        with progress_lock:
-            review_progress.update(value if isinstance(value, dict) else {'message': value})
     collector = fetcher or HTTPFetcher()
     repositories = repository_fetcher or RepositoryFetcher()
-    authorities = {f"127.0.0.1:{port}", f"localhost:{port}"}
-    origins = {f"http://{host}" for host in authorities}
+    authorities = {domain} if domain else {f"127.0.0.1:{port}", f"localhost:{port}"}
+    origins = {f"https://{domain}"} if domain else {f"http://{host}" for host in authorities}
 
-    # Validate incoming browser requests and apply security headers to responses.
     @app.middleware("http")
-    async def local_boundary(request: Request, call_next):
+    async def browser_boundary(request: Request, call_next):
         if request.headers.get("host") not in authorities:
             return JSONResponse({"detail": "Invalid host"}, status_code=403)
         if request.method == "POST":
@@ -45,16 +44,13 @@ def create_app(chat: HFChat, port: int = 8000, fetcher: HTTPFetcher | None = Non
                 return JSONResponse({"detail": "Same-origin browser request required"}, status_code=403)
             if request.headers.get("content-type", "").split(";")[0] != "application/json":
                 return JSONResponse({"detail": "JSON required"}, status_code=415)
-            # Enforce the request-body limit while reading, before JSON validation.
-            size = 0
-            chunks = []
+            size, chunks = 0, []
             async for chunk in request.stream():
                 size += len(chunk)
                 if size > 300000:
                     return JSONResponse({"detail": "Request too large"}, status_code=413)
                 chunks.append(chunk)
             request._body = b"".join(chunks)
-        # Run the matched route, then restrict browser loading and response caching.
         response = await call_next(request)
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; "
@@ -65,92 +61,92 @@ def create_app(chat: HFChat, port: int = 8000, fetcher: HTTPFetcher | None = Non
         response.headers["Cache-Control"] = "no-store"
         return response
 
-    # Translate validation failures into useful messages without echoing submitted data.
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, exc: RequestValidationError):
-        # Do not echo user text or raw validation input into errors.
-        if request.url.path == "/api/review-repository":
-            return JSONResponse({"detail": "Provide a GitHub repository URL (up to 2048 characters) and optional ref (up to 200 characters)."}, status_code=422)
-        if request.url.path == "/api/analyze":
-            return JSONResponse({"detail": "Provide a URL (up to 8192 characters) and a question "
-                                 "(up to 4000 characters)."}, status_code=422)
-        return JSONResponse({"detail": "Invalid conversation. Use nonempty messages, at most "
-                             "10 previous exchanges, 20000 characters per message and 40000 total."},
-                            status_code=422)
+        return JSONResponse({"detail": "Invalid input. Check required fields and input limits."}, status_code=422)
 
-    # Serve the HTML page that contains chat, webpage analysis, and repository review.
     @app.get("/")
     def index():
         return FileResponse(static / "index.html")
 
-    # Allow one inference request at a time and release the lock even on failure.
-    @app.post("/api/chat", response_model=ChatReply)
-    def send_message(body: ChatRequest):
-        if not lock.acquire(blocking=False):
-            return JSONResponse({"detail": "An answer is already being generated. Please wait."},
-                                status_code=429)
-        try:
-            return chat.reply(body)
-        except ChatError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=502)
-        finally:
-            lock.release()
+    @app.get("/api/config")
+    def config():
+        return {"token_required": chat is None}
 
-    # Collect webpage evidence, ask GLM to analyze it, and return collection details.
+    @app.get("/healthz")
+    def health():
+        return {"status": "ok"}
+
+    async def dispatch(request, make_work):
+        token = request.headers.get("x-hf-token", "").strip()
+        if token and not re.fullmatch(r"hf_[A-Za-z0-9]{8,200}", token):
+            return JSONResponse({"detail": "Enter a valid Hugging Face token."}, status_code=401)
+        if not token and chat is None:
+            return JSONResponse({"detail": "Enter your Hugging Face token to continue."}, status_code=401)
+        if not lock.acquire(blocking=False):
+            return JSONResponse({"detail": "Server busy. Another operation is running; please try again shortly."}, status_code=429)
+        try:
+            client = client_factory(token) if token else chat
+            operation = Operation(make_work(client), lock)
+            operation.thread.start()
+        except Exception:
+            lock.release()
+            return JSONResponse({"detail": "Unable to start operation."}, status_code=502)
+        if "application/x-ndjson" in request.headers.get("accept", ""):
+            return operation.response()
+        async for event in operation.events_async():
+            if event["type"] == "complete":
+                return JSONResponse(event["data"])
+            if event["type"] == "error":
+                return JSONResponse({"detail": event["data"]["detail"]}, status_code=event["data"]["status"])
+        return JSONResponse({"detail": "Operation interrupted."}, status_code=502)
+
+    @app.post("/api/chat")
+    async def send_message(body: ChatRequest, request: Request):
+        return await dispatch(request, lambda client: lambda emit: client.reply(body).model_dump())
+
     @app.post("/api/analyze")
-    def analyze_url(body: AnalysisRequest):
-        if not lock.acquire(blocking=False):
-            return JSONResponse({"detail": "Another request is running. Please wait."}, status_code=429)
-        try:
-            evidence = collector.fetch(body.url)
-            answer = chat.analyze(body.question, evidence)
-            return {**answer.model_dump(), "final_url": evidence.final_url,
-                    "status": evidence.responses[-1]["status"],
-                    "responses": len(evidence.responses),
-                    "body_bytes": sum(r["body_bytes"] for r in evidence.responses)}
-        except FetchError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=400)
-        except ChatError as exc:
-            return JSONResponse({"detail": str(exc)}, status_code=502)
-        finally:
-            lock.release()
+    async def analyze_url(body: AnalysisRequest, request: Request):
+        def work(client):
+            def run(emit):
+                emit("progress", {"message": "Fetching webpage..."})
+                evidence = collector.fetch(body.url)
+                checkpoint()
+                emit("progress", {"message": "Analyzing HTTP headers and HTML..."})
+                answer = client.analyze(body.question, evidence)
+                return {**answer.model_dump(), "final_url": evidence.final_url,
+                        "status": evidence.responses[-1]["status"], "responses": len(evidence.responses),
+                        "body_bytes": sum(r["body_bytes"] for r in evidence.responses)}
+            return run
+        return await dispatch(request, work)
 
-    @app.get("/api/review-progress")
-    def get_review_progress(request: Request):
-        if request.headers.get('x-chat-request') != '1':
-            return JSONResponse({"detail": "Local browser request required"}, status_code=403)
-        with progress_lock:
-            return dict(review_progress)
-
-    # Collect source, request findings and fixes, and return a downloadable HTML report.
     @app.post("/api/review-repository")
-    def review_repository(body: RepositoryRequest):
-        if not lock.acquire(blocking=False):
-            return JSONResponse({"detail": "Another request is running. Please wait."}, status_code=429)
-        try:
-            with progress_lock:
-                review_progress.clear()
-            update_review_progress({'phase': 'collecting', 'message': 'Resolving the repository and commit...'})
-            evidence = repositories.fetch(body.url, body.ref, progress=update_review_progress)
-            answer = chat.review_repository(evidence, progress=update_review_progress)
-            review = answer.review
-            update_review_progress({'phase': 'complete',
-                                    'message': 'Review finished.' if answer.finish_reason == 'stop' else 'Review finished with incomplete batches.',
-                                    'reviewed_files': len(review['reviewed_paths']) if review else len(evidence.files),
-                                    'skipped_files': len(review['skipped']) if review else len(evidence.skipped)})
-            return {**answer.model_dump(), "repository": evidence.url, "commit": evidence.commit,
-                    "reviewed_files": len(review['reviewed_paths']) if review else len(evidence.files),
-                    "skipped_files": len(review['skipped']) if review else len(evidence.skipped),
-                    "report_html": render_report(evidence, answer.answer, answer.finish_reason, MODEL, review)}
-        except FetchError as exc:
-            update_review_progress({'phase': 'error', 'message': 'Collection failed.'})
-            return JSONResponse({"detail": str(exc)}, status_code=400)
-        except ChatError as exc:
-            update_review_progress({'phase': 'error', 'message': 'Review failed.'})
-            return JSONResponse({"detail": str(exc)}, status_code=502)
-        finally:
-            lock.release()
+    async def review_repository(body: RepositoryRequest, request: Request):
+        def work(client):
+            def run(emit):
+                emit("progress", {"phase": "collecting", "message": "Resolving repository and commit..."})
+                evidence = repositories.fetch(body.url, body.ref, progress=lambda value: emit("progress", value))
 
-    # Expose the CSS and JavaScript used by the local HTML page.
+                def result(review, answer, finish):
+                    return {"answer": answer, "finish_reason": finish, "review": review,
+                            "repository": evidence.url, "commit": evidence.commit,
+                            "reviewed_files": len(review['reviewed_paths']) if review else len(evidence.files),
+                            "skipped_files": len(review['skipped']) if review else len(evidence.skipped),
+                            "report_html": render_report(evidence, answer, finish, MODEL, review)}
+
+                def progress(value):
+                    checkpoint()
+                    state = dict(value)
+                    snapshot = state.pop("review", None)
+                    emit("progress", state)
+                    if snapshot is not None:
+                        emit("snapshot", result(snapshot, review_text(snapshot), "incomplete"))
+
+                checkpoint()
+                answer = client.review_repository(evidence, progress=progress)
+                return result(answer.review, answer.answer, answer.finish_reason)
+            return run
+        return await dispatch(request, work)
+
     app.mount("/static", StaticFiles(directory=static), name="static")
     return app

@@ -1,14 +1,15 @@
-# GLM-5.3 local chat
+# BonnyAI: GLM-5.3 security review and chat
 
-Text chat through Hugging Face Inference Providers, with a local FastAPI webpage.
-Step 1 connectivity was confirmed by the user's successful Novita response. Step 2
-adds the chat interface and bounded conversation history. Step 3 adds HTTP GET
-collection and analysis of response headers and HTML.
+GitHub source review, HTTP inspection, and chat through Hugging Face Inference
+Providers, served by FastAPI on AWS Lightsail.
 
-The AWS test deployment uses one Lightsail server and visitor-supplied HF tokens.
+**Web app:** [https://3-211-234-215.sslip.io](https://3-211-234-215.sslip.io).
+Open it directly in your browser and enter your own Hugging Face token. No SSH
+tunnel, local server, registration, or domain purchase is required. Reports remain
+in the page until cleared, refreshed, or closed; download any report you want to keep.
+
 See [architecture and deployment steps](#aws-lightsail-test-deployment).
-Without a domain, use the SSH tunnel setup below. The original terminal-token
-local mode remains available.
+The original terminal-token local mode remains available for development.
 
 ## Analyze a webpage (Step 3)
 
@@ -41,7 +42,7 @@ blocked. All A/AAAA answers are checked before connecting directly to one approv
 IP. HTTPS certificates and SNI use the original hostname. Environment proxies and
 automatic redirect following are not used. A request authorizes only the submitted
 hostname; redirects to another hostname require submitting that URL separately.
-This is a local single-user tool, not a persistent organizational target registry.
+Targets are supplied per request; the app keeps no persistent target registry.
 
 Limits: five redirects, 100000 bytes across response bodies and header names/values,
 and 140000 characters of serialized evidence. Exceeding a limit fails before the
@@ -107,34 +108,52 @@ bundle (`small_3_0`, USD 12/month before taxes and excess usage). No NAT gateway
 load balancer, registration, database, queues, or report bucket. Visitors pay their
 own Hugging Face inference charges. See [Lightsail pricing](https://aws.amazon.com/lightsail/pricing/).
 
-The current test setup has **no domain**. Its web port binds only to server loopback
-and is reached through an encrypted SSH tunnel. A separate optional configuration
-supports public HTTPS when a domain is available.
+The current deployment is **public HTTPS** at
+[https://3-211-234-215.sslip.io](https://3-211-234-215.sslip.io), served by
+`bonnyai-test-server` at static IPv4 `3.211.234.215`. The free `sslip.io` hostname
+resolves its embedded IP address to the server; no purchased domain or DNS account
+is needed. It depends on the third-party [sslip.io DNS service](https://sslip.io/).
+Caddy obtains and renews a publicly trusted certificate. Visitors connect directly
+to AWS; SSH is used only for administration.
+
+| Network entry | Access |
+| --- | --- |
+| TCP 443 | Public HTTPS webpage, API, progress and report responses |
+| TCP 80 | Public certificate validation and GET/HEAD redirects to HTTPS; other HTTP requests are rejected |
+| TCP 22 | SSH restricted to the administrative public IP |
+| TCP 8000 | Internal Docker network only |
+| TCP 8080 | Not published in the current deployment |
 
 ### Architecture
 
 ```mermaid
 flowchart LR
-    Browser["Browser: token, progress, findings"]
-    Tunnel["Local SSH tunnel: 127.0.0.1:8080"]
-    Download["HTML download on visitor device"]
-    subgraph AWS["One Lightsail Ubuntu server"]
-        SSH["SSH: port 22, administrative IP only"]
-        Caddy["Caddy: server loopback port 8080"]
-        App["FastAPI: internal Docker port 8000"]
-        SSH --> Caddy --> App
+    Browser["Visitor browser: HF token, progress, findings"]
+    DNS["sslip.io DNS: hostname resolves to 3.211.234.215"]
+    Download["HTML report saved on visitor device"]
+    Admin["Administrator"]
+    subgraph AWS["Lightsail: bonnyai-test-server / us-east-1"]
+        Caddy["Caddy: public HTTPS 443 / HTTP 80 redirects and certificate validation"]
+        App["FastAPI: Docker-only port 8000 / one active operation"]
+        Certificates["Persistent TLS certificates only"]
+        SSH["SSH 22: administrative IP only"]
+        Caddy <-->|"Internal Docker network"| App
+        Caddy --- Certificates
+        SSH -.->|"Manage deployment"| App
     end
-    Browser <--> Tunnel <--> SSH
-    Browser --> Download
-    App --> GitHub["GitHub API / source"]
-    App --> Website["Submitted public website"]
-    App --> HF["Hugging Face / Novita / GLM"]
+    Browser -->|"Resolve hostname"| DNS
+    Browser <-->|"HTTPS: 3-211-234-215.sslip.io"| Caddy
+    Browser -->|"Optional download"| Download
+    Admin -->|"SSH administration"| SSH
+    App -->|"Collect public source"| GitHub["GitHub API and raw source"]
+    App -->|"Collect headers and HTML"| Website["Submitted public website"]
+    App -->|"Visitor token and inference input"| HF["Hugging Face / Novita / GLM"]
 ```
 
 - Docker Compose runs one `app` process and `caddy`; both restart automatically.
 - The app accepts one operation at a time across GitHub scanning, HTTP inspection,
   and chat. Other requests receive HTTP 429 with a server-busy message.
-- Visitors enter their own HF token in a masked field. Tokens travel in a request
+- Visitors enter their own HF token in a masked field. Tokens travel over HTTPS in a request
   header, never in URLs or prompts. Each operation creates its own inference client.
 - Tokens, conversation, source, findings and generated reports use memory only.
   There is no history, job ID, progress lookup, report storage or retrieval API.
@@ -150,72 +169,106 @@ flowchart LR
 - App filesystem is read-only, temporary filesystems are memory-backed, and Docker
   logs are disabled for both services. Host bootstrap disables swap and core dumps.
   Caddy also discards its logs, so request headers cannot enter proxy logs.
+  The only persistent runtime volume is `caddy_data`, for TLS certificates and
+  ACME account state; it contains no visitor tokens or reports.
 - Source limits, provider timeouts, source citation validation, HTML escaping, and
   blocking of private/cloud metadata destinations remain in place.
 
-### Deployment without a domain (current mode)
+### Public HTTPS deployment (current mode)
 
-1. Create the Ubuntu instance and attach a static IP. Use a distinct name for the
-   instance and SSH key pair (Lightsail resource names share a namespace).
-   Set its firewall to TCP 22 from your administrative public IP only. Leave
-   TCP 80, 443, 8000 and 8080 closed publicly.
+1. Create an Ubuntu 24.04 Lightsail instance and attach a static IP. The current
+   instance is `bonnyai-test-server`, with static IP resource `bonnyai-test-ip`.
+   Keep TCP 22 restricted to your administrative IP; allow TCP 80/443 publicly.
+   Do not open TCP 8000 or 8080.
 2. Supply `deploy/bootstrap.sh` as Lightsail user data, or copy it to the server
    and run `sudo sh deploy/bootstrap.sh`. It installs Git and Docker Engine/Compose
-   using [Docker's Ubuntu repository](https://docs.docker.com/engine/install/ubuntu/).
-   The script is POSIX-compatible because Lightsail wraps user data in `/bin/sh`.
-3. Copy the implementation branch to the server (clone directly if the repository
-   is publicly readable, or upload a Git archive from your authenticated checkout).
-   Never copy `.env`, SSH/AWS credentials, `.venv` or local reports.
-4. In the server's repository directory, run:
+   using [Docker's Ubuntu repository](https://docs.docker.com/engine/install/ubuntu/)
+   and disables swap/core dumps. It is POSIX-compatible with Lightsail's `/bin/sh`
+   user-data wrapper.
+3. Copy `feature/aws-test-deployment` to `/home/ubuntu/bonnyai` on the server.
+   Clone if the repository is publicly readable, or upload a Git archive from your
+   authenticated checkout. Do not copy SSH/AWS credentials, `.venv` or local reports.
+4. Choose the hostname. For the current static IP, use `3-211-234-215.sslip.io`.
+   Verify it resolves to `3.211.234.215`. For a different IP, change the embedded
+   address; alternatively, point your own domain's DNS A record to the static IP.
+5. In the server repository directory, create the deployment configuration:
 
    ```bash
-   sudo docker compose -f compose.yaml -f compose.tunnel.yaml config --quiet
-   sudo docker compose -f compose.yaml -f compose.tunnel.yaml up -d --build
-   sudo docker compose -f compose.yaml -f compose.tunnel.yaml ps
-   curl --fail http://127.0.0.1:8080/healthz
+   cp .env.example .env
+   # APP_DOMAIN=3-211-234-215.sslip.io for this deployment.
+   # For another server, edit APP_DOMAIN to its lowercase DNS hostname.
+   sudo docker compose config --quiet
    ```
 
-   Compose 2.24.4+ is required for the port/volume overrides. No `.env` or shared
-   `HF_TOKEN` is required. This mode creates no persistent application data volume.
-5. On your computer, keep this tunnel command running, substituting the actual
-   private-key path and static IP:
+   `.env` contains the hostname only. Visitors supply HF tokens through the browser;
+   never configure a shared `HF_TOKEN` here.
+6. If migrating from the old tunnel deployment, stop that stack once, preserving
+   volumes. Then start the public configuration:
 
-   ```powershell
-   ssh -i "$env:USERPROFILE\.ssh\bonnyai-lightsail.pem" -N -L 127.0.0.1:8080:127.0.0.1:8080 -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 ubuntu@LIGHTSAIL_STATIC_IP
+   ```bash
+   sudo docker compose -f compose.yaml -f compose.tunnel.yaml down
+   sudo docker compose up -d --build --wait --wait-timeout 120
+   sudo docker compose ps
    ```
 
-6. Open **http://127.0.0.1:8080**, enter your HF token, and use the web interface.
-   SSH encrypts the connection to AWS. The server cannot be opened directly by its
-   public IP. If your public IP changes, update the Lightsail SSH firewall rule.
+   For a fresh deployment, omit the `down` command. Do not include
+   `compose.tunnel.yaml` in subsequent public startup/update commands.
+7. Caddy provisions the certificate automatically. Verify normal browser trust,
+   HTTPS health, and HTTP redirects:
 
-### Optional public HTTPS when a domain is available
+   ```bash
+   curl --fail https://3-211-234-215.sslip.io/healthz
+   curl --head http://3-211-234-215.sslip.io/
+   ```
 
-Point a DNS A record to the static IP, open TCP 80/443, and keep SSH restricted.
-Copy `.env.example` to `.env`, setting `APP_DOMAIN` to a lowercase DNS hostname
-without a scheme, path or port. Do not add HF tokens to the file.
+8. Open [the web app](https://3-211-234-215.sslip.io) from any browser and enter an
+   HF token with Inference Providers permission. No local process or SSH tunnel is
+   needed. The test app has no sign-up/login; each visitor supplies their own token.
+   Its single-operation limit applies across all visitors.
 
-Switch configurations by stopping the tunnel stack first:
+Caddy keeps certificates and ACME state in `caddy_data`; preserve this volume during
+updates to avoid unnecessary certificate reissuance. Public app mode requires
+`APP_DOMAIN`, validates HTTPS origins, and runs one process. Plain HTTP API requests
+are rejected before reaching the app. Certificate issuance/renewal requires working
+DNS and reachable challenge ports; see [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https).
+
+### Optional private SSH-tunnel mode
+
+`compose.tunnel.yaml` remains available for private testing but is **not active**.
+To use it, stop the public stack, close public TCP 80/443 in the Lightsail firewall,
+and start the override:
 
 ```bash
-sudo docker compose -f compose.yaml -f compose.tunnel.yaml down
-sudo docker compose config --quiet
-sudo docker compose up -d --build
-sudo docker compose ps
+sudo docker compose down
+sudo docker compose -f compose.yaml -f compose.tunnel.yaml up -d --build --wait
 ```
 
-Caddy obtains/renews TLS certificates and persists them in `caddy_data`. Only Caddy
-publishes 80/443; app port 8000 stays internal. Plain HTTP API submissions are
-rejected; GET/HEAD requests redirect to HTTPS. Caddy requires working DNS and
-reachable challenge ports; see [automatic HTTPS](https://caddyserver.com/docs/automatic-https).
-The app fails startup without `APP_DOMAIN` in public mode. Run a single process;
-multiple processes would each have a separate busy lock.
+This publishes only server loopback `127.0.0.1:8080`. It uses no public certificate
+and needs no `APP_DOMAIN`. From your computer, keep this command running and open
+`http://127.0.0.1:8080`:
+
+```powershell
+ssh -i "$env:USERPROFILE\.ssh\bonnyai-lightsail.pem" -N -L 127.0.0.1:8080:127.0.0.1:8080 -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 ubuntu@3.211.234.215
+```
+
+Compose 2.24.4+ is required for the tunnel override. When returning to public HTTPS,
+stop the tunnel stack, reopen TCP 80/443, and start the base Compose file as above.
 
 ### Updates and checks
 
 Wait for any active operation to finish, update the checkout/archive, and rerun the
-same Compose build command for the selected mode. For a Git clone, first run
-`git pull --ff-only origin feature/aws-test-deployment`. Container/server restart
-interrupts scans; visitors must resubmit them.
+public Compose build command below. For a Git clone, first run
+`git pull --ff-only origin feature/aws-test-deployment`. This deployment was installed
+from a Git archive, so updates require uploading/extracting a new committed archive
+into `/home/ubuntu/bonnyai`, preserving its `.env` and the `caddy_data` volume.
+
+```bash
+sudo docker compose config --quiet
+sudo docker compose up -d --build --wait --wait-timeout 120
+curl --fail https://3-211-234-215.sslip.io/healthz
+```
+
+Container/server restart interrupts scans; visitors must resubmit them.
 
 Offline verification: `.venv/Scripts/python.exe -m unittest -q` and
 `node test_browser.cjs`. Tests use simulated providers and repositories and cover
@@ -223,6 +276,12 @@ visitor token isolation, same-origin restrictions, streaming partial reports,
 busy-slot release, deadlines, cancellation, rendering, download and page cleanup.
 Live inference requires a visitor's funded HF token; offline tests do not establish
 model detection accuracy. Check container health and `/healthz` after deployment.
+The public deployment was verified on 2026-09-19: trusted TLS, HTTPS page/assets and
+health, HTTP redirects, rejection of plaintext API submissions, visitor-token and
+origin enforcement, and a real Edge browser check including mobile layout. These
+checks passed after stopping the local SSH tunnel. No paid inference calls were
+made; live GLM scanning still requires a visitor token.
+
 For startup diagnosis, use `docker compose ps` and `docker inspect`; persistent
 application/proxy logs are intentionally disabled.
 

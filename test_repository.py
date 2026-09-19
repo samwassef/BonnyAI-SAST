@@ -70,7 +70,8 @@ class CollectionTests(unittest.TestCase):
 
     # Regression check: total source budget is reported.
     def test_total_source_budget_is_reported(self):
-        evidence = collect([(f'{n}.py', 'a' * 30000) for n in range(3)])
+        with patch.object(RepositoryFetcher, 'MAX_SOURCE', 80000):
+            evidence = collect([(f'{n}.py', 'a' * 30000) for n in range(3)])
         self.assertEqual(len(evidence.files), 2)
         self.assertEqual(evidence.skipped[0]['reason'], 'review input limit')
 
@@ -120,7 +121,8 @@ class CollectionTests(unittest.TestCase):
         collector._get = Mock(return_value=b'x')
         evidence = collector.read_tree(source_tree([(p, 'x') for p in excluded + included]),
                                        'o/r', COMMIT, float('inf'))
-        self.assertEqual([f['path'] for f in evidence.files], sorted(included))
+        self.assertEqual({f['path'] for f in evidence.files}, set(included))
+        self.assertEqual(evidence.files[-1]['path'], 'tests/test_app.py')
         self.assertEqual({f['path'] for f in evidence.skipped}, set(excluded))
         self.assertEqual(collector._get.call_count, len(included))
         for call in collector._get.call_args_list:
@@ -171,9 +173,10 @@ class ReviewTests(unittest.TestCase):
         with patch('app.chat.InferenceClient') as factory:
             call = factory.return_value.__enter__.return_value.chat_completion
             call.return_value = SimpleNamespace(choices=[SimpleNamespace(
-                message=SimpleNamespace(content='Proposed fix'), finish_reason='stop')])
+                message=SimpleNamespace(content='{"findings": [], "limitations": []}'), finish_reason='stop')])
             answer = HFChat('fake-token').review_repository(self.evidence)
-            self.assertEqual(answer.answer, 'Proposed fix')
+            self.assertEqual(answer.review['reviewed_paths'], ['app.py'])
+            self.assertEqual(answer.review['completed_batches'], 1)
             args = call.call_args.kwargs
             self.assertEqual(args['max_tokens'], 8192)
             self.assertIn('UNTRUSTED', args['messages'][0]['content'])
@@ -190,6 +193,40 @@ class ReviewTests(unittest.TestCase):
         self.assertIn('Incomplete', html)
         self.assertIn(COMMIT, html)
         self.assertIn('unsupported file type', html)
+
+    def test_report_formats_findings_and_keeps_code_inert(self):
+        answer = '\n'.join([
+            '## Confirmed findings', '### Stored XSS', 'Severity: High',
+            '#### Description', 'Untrusted content reaches HTML.',
+            '#### Root cause', 'Missing output encoding.',
+            '#### Exploitation steps', '1. Submit synthetic input.', '2. View the result.',
+            '#### Code fix', '```html', '<script>alert(1)</script>',
+            '### This is code, not a heading', 'Severity: Critical', '```',
+        ])
+        html = render_report(self.evidence, answer, 'stop', 'GLM')
+        self.assertIn('<h3>Stored XSS</h3>', html)
+        self.assertIn('class="severity high">Severity: High', html)
+        for heading in ['Description', 'Root cause', 'Exploitation steps', 'Code fix']:
+            self.assertIn(f'<h4>{heading}</h4>', html)
+        self.assertIn('1. Submit synthetic input.<br>2. View the result.', html)
+        self.assertIn('<pre><code>&lt;script&gt;', html)
+        self.assertNotIn('<script>', html)
+        self.assertNotIn('<h3>This is code', html)
+        self.assertNotIn('class="severity critical"', html)
+
+    def test_report_severity_allowlist_and_interrupted_code(self):
+        for severity in ['Critical', 'High', 'Medium', 'Low', 'Informational']:
+            html = render_report(self.evidence, f'Severity: {severity}', 'stop', 'GLM')
+            self.assertIn(f'class="severity {severity.lower()}"', html)
+        html = render_report(self.evidence,
+            '### <img src=x onerror=alert(1)>\nSeverity: Unknown\n'
+            '```diff\n-<script>unsafe</script>\n+safe', 'length', 'GLM')
+        self.assertIn('Incomplete', html)
+        self.assertIn('<h3>&lt;img', html)
+        self.assertIn('<p>Severity: Unknown</p>', html)
+        self.assertIn('+safe</code></pre>', html)
+        self.assertNotIn('<img', html)
+        self.assertNotIn('<script>', html)
 
     # Regression check: api success errors validation and lock release.
     def test_api_success_errors_validation_and_lock_release(self):

@@ -32,7 +32,33 @@ document.querySelector('#repository-form').addEventListener('submit', async (eve
   repositoryReport = null;
   download.hidden = true;
   result.textContent = '';
+  result.setAttribute('aria-busy', 'true');
+  const progressPanel = document.querySelector('#repository-progress');
+  RepositoryReviewUI.progress(progressPanel, {phase: 'collecting'});
+  const urlInput = document.querySelector('#repository-url');
+  const refInput = document.querySelector('#repository-ref');
+  urlInput.disabled = refInput.disabled = true;
   status.textContent = 'Downloading repository and reviewing source with GLM. This may take a few minutes.';
+  let reviewing = true;
+  let polling = false;
+  const progressTimer = setInterval(async () => {
+    if (polling) return;
+    polling = true;
+    try {
+      const response = await fetch('/api/review-progress', {headers: {'X-Chat-Request': '1'}});
+      if (response.ok) {
+        const progress = await response.json();
+        if (reviewing) {
+          status.textContent = progress.message;
+          RepositoryReviewUI.progress(progressPanel, progress);
+        }
+      }
+    } catch (_) {
+      // The main request reports connection errors; progress is best effort.
+    } finally {
+      polling = false;
+    }
+  }, 1500);
   try {
     const response = await fetch('/api/review-repository', {
       method: 'POST', headers: {'Content-Type': 'application/json', 'X-Chat-Request': '1'},
@@ -40,15 +66,22 @@ document.querySelector('#repository-form').addEventListener('submit', async (eve
         ref: document.querySelector('#repository-ref').value.trim()})
     });
     const data = await response.json();
+    reviewing = false;
     if (!response.ok) throw new Error(data.detail || 'Repository review failed.');
-    result.textContent = data.answer;
+    RepositoryReviewUI.render(result, data);
     status.textContent = `${data.repository} · Commit ${data.commit.slice(0, 12)} · ${data.reviewed_files} files reviewed · ${data.skipped_files} skipped`
       + (data.finish_reason !== 'stop' ? ' · Model response incomplete or interrupted.' : ' · Report ready.');
     repositoryReport = {html: data.report_html, commit: data.commit};
+    if (data.review?.partial) status.textContent += ' Partial coverage; see skipped files and batch status in the report.';
     download.hidden = false;
   } catch (error) {
     status.textContent = error.message || 'Connection failed.';
   } finally {
+    reviewing = false;
+    clearInterval(progressTimer);
+    progressPanel.hidden = true;
+    result.setAttribute('aria-busy', 'false');
+    urlInput.disabled = refInput.disabled = false;
     busy = false;
     button.disabled = send.disabled = clear.disabled = document.querySelector('#analyze').disabled = false;
   }
@@ -112,6 +145,7 @@ clear.addEventListener('click', () => {
   repositoryReport = null;
   document.querySelector('#download-report').hidden = true;
   document.querySelector('#repository-result').textContent = '';
+  document.querySelector('#repository-progress').hidden = true;
   document.querySelector('#repository-status').textContent = '';
   history = [];
   messages.replaceChildren();

@@ -135,18 +135,25 @@ References: [GLM-5.3](https://huggingface.co/zai-org/GLM-5.3),
 
 ## Review a GitHub repository
 
-Use **Review GitHub source code** with a public URL such as
-`https://github.com/owner/repository`. Optionally enter a branch, tag, or commit in
-the separate field; leaving it blank reviews the default branch. Click **Review
-and create HTML report**, then **Download HTML report** to save the generated
-standalone report. Restart the server to load this feature.
+Use **Review GitHub source code** with any public repository URL such as
+`https://github.com/owner/repository`. Optionally enter a branch, tag, or commit;
+leaving it blank reviews the default branch. Click **Scan repository**. Collection
+and batch progress appear on the page with collected, reviewed, and skipped counts.
+Results appear directly below the form as readable finding cards: bold titles,
+colored severity, description, root cause, evidence, proposed exploitation steps,
+code fixes, and regression tests. Confirmed findings and findings needing verification
+are separated. Expand the coverage lists to inspect skipped files or failures.
+**Download HTML report** saves the same findings and coverage as a standalone report.
+Restart the server and refresh the page after updating. No scan CLI is required;
+WebGoat is only an optional evaluation example, not a scanner-specific target.
 
 The collector requests only the commit SHA, lists that commit's files using the
 [GitHub trees API](https://docs.github.com/en/rest/git/trees), and downloads selected
 source files from raw.githubusercontent.com. It never downloads a repository ZIP,
 so large assets do not count toward a whole-repository download limit.
-GLM receives only selected UTF-8 source-code files with paths and original contents,
-in alphabetical path order. Pipeline, Docker/container, build/deployment, configuration,
+GLM receives selected UTF-8 source-code files with paths and original contents.
+Application endpoints, security code, lessons, and templates are prioritized, followed
+by other application source; tests and tooling come last. Pipeline, Docker/container, build/deployment, configuration,
 and documentation files are excluded before downloading. This includes CI directories
 (such as `.github`, `.gitlab`, `.circleci`, and `pipelines`), Dockerfile variants,
 container/deployment directories, known build scripts and `*.config.*` files.
@@ -156,20 +163,37 @@ Selection uses extensions and known path/name conventions; unusually named autom
 scripts with a source-code extension may still be included.
 GLM is asked for severity, confidence, file/line evidence, impact and prerequisites,
 concrete proposed fixes (preferably diffs), and suggested regression tests.
-The report contains the commit, timestamp, model, completion status, full model
-answer, reviewed file list, and every skipped file with its reason.
+Intentional training vulnerabilities (including WebGoat lessons) remain in scope and
+are labeled explicitly. Each batch must return validated JSON findings with a title,
+severity, confidence, description, root cause, source references, input-to-sink trace,
+impact, prerequisites, proposed exploitation steps, code fix, and regression test.
+References must cite supplied files and valid line ranges. Validation checks structure
+and reference bounds; it cannot prove that a model's security conclusions are correct.
+The styled HTML report is generated from those fields, with colored severity badges,
+code blocks, and collapsible coverage inventories. Counts are calculated by Python.
 
-This is a bounded static review: up to 100 files, 30000 bytes per file, 80000 source
-bytes overall, and 140000 characters of serialized model input. Files that do not
+This is a bounded static review: up to 400 source download attempts, 30000 bytes per
+file, and 1200000 collected source bytes overall. Source is reviewed in up to 24
+batches, each bounded to 80000 source bytes and 140000 serialized input characters.
+Primary files occupy roughly three quarters of each batch, reserving space for
+referenced helpers and security context. Files stay adjacent by directory where
+possible; context uses lexical symbol matching, not a language-aware call graph.
+Every primary file receives its own review even if used as context in another batch.
+Batch progress is displayed in the page. Up to 24 provider requests can consume
+credits per scan; larger scans can take many minutes. Files that do not
 fit are listed as skipped, without truncating file contents. Dependency/build
 folders, recognized lockfiles, minified files, symlinks, binary/non-UTF-8 files, and
 unsupported extensions are skipped. File-list metadata over 10 MB, more than 100000 entries, or a truncated
-GitHub file list fail explicitly before inference. Up to 100 individual source
-downloads are attempted per review. The collection budget is
-120 seconds checked between reads/requests, with existing DNS and socket timeouts;
+GitHub file list fail explicitly before inference. The collection budget is
+300 seconds checked between reads/requests, with existing DNS and socket timeouts;
 an in-flight operation may exceed the budget. The review uses an 8192-token output
-budget and the existing 90-second provider timeout. Partial model answers are
-clearly labeled and remain downloadable.
+budget and the existing 90-second provider timeout per batch. Truncated or invalid
+structured answers are recorded as failed batches, never clean scans; unvalidated
+output is not rendered as findings. Provider errors stop subsequent requests and
+preserve already validated findings. Duplicates with identical root causes and source
+locations are collapsed. Files are counted as reviewed only after their primary batch
+returns a complete validated response. Skipped files or failed batches make coverage
+explicitly partial; no findings does not mean the repository is safe.
 
 Only public repositories on github.com are supported; no GitHub credentials are
 used. GitHub rate limits and unavailable refs produce a visible error. Downloads
@@ -188,3 +212,27 @@ Repository tests use mocked file lists, source downloads, and inference response
 cover URL and redirect boundaries, size limits, file selection, unsafe repository
 paths, commit pinning, prompt construction, escaped HTML reports, API validation,
 and recovery after failures. Live repository review with GLM has not been verified.
+
+Browser regression checks use simulated GitHub and model responses for Python,
+JavaScript, and Java repository layouts. Run `node test_browser.cjs` with Node 22+
+and Microsoft Edge installed (or set `BROWSER_PATH` to a Chromium executable).
+These exercise the page, progress polling, formatted findings, safe code display,
+download action, partial/empty/error states, reset, and mobile layout without tokens
+or external requests. They validate the interface, not live vulnerability detection.
+
+### Evaluate detection with GLM
+
+The opt-in evaluation uses eight synthetic source fixtures: vulnerable and mitigated
+examples of SQLi, XSS, access control, and credentials. It checks the expected category
+and false positives for each paired control. These are live model evaluations, separate
+from the offline pipeline tests, and consume provider credits. The optional WebGoat
+pass reviews the exact commit from the supplied report and exports a new HTML report;
+inspect its findings and coverage manually. Source fixtures are never executed.
+
+```powershell
+.venv/Scripts/python.exe evaluate_review.py --prompt-token --webgoat
+```
+
+The evaluation saves `review-evaluation.json` and, with `--webgoat`,
+`review-evaluation.webgoat.html` locally. These files contain findings and code fixes;
+they are ignored by Git by default. No live accuracy score is claimed until this runs.

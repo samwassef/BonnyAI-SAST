@@ -23,6 +23,12 @@ def create_app(chat: HFChat, port: int = 8000, fetcher: HTTPFetcher | None = Non
     static = Path(__file__).parent / "static"
     # Share a single lock across chat, webpage analysis, and repository review.
     lock = Lock()
+    review_progress = {"message": "No review running."}
+    progress_lock = Lock()
+
+    def update_review_progress(value):
+        with progress_lock:
+            review_progress.update(value if isinstance(value, dict) else {'message': value})
     collector = fetcher or HTTPFetcher()
     repositories = repository_fetcher or RepositoryFetcher()
     authorities = {f"127.0.0.1:{port}", f"localhost:{port}"}
@@ -109,20 +115,38 @@ def create_app(chat: HFChat, port: int = 8000, fetcher: HTTPFetcher | None = Non
         finally:
             lock.release()
 
+    @app.get("/api/review-progress")
+    def get_review_progress(request: Request):
+        if request.headers.get('x-chat-request') != '1':
+            return JSONResponse({"detail": "Local browser request required"}, status_code=403)
+        with progress_lock:
+            return dict(review_progress)
+
     # Collect source, request findings and fixes, and return a downloadable HTML report.
     @app.post("/api/review-repository")
     def review_repository(body: RepositoryRequest):
         if not lock.acquire(blocking=False):
             return JSONResponse({"detail": "Another request is running. Please wait."}, status_code=429)
         try:
-            evidence = repositories.fetch(body.url, body.ref)
-            answer = chat.review_repository(evidence)
+            with progress_lock:
+                review_progress.clear()
+            update_review_progress({'phase': 'collecting', 'message': 'Resolving the repository and commit...'})
+            evidence = repositories.fetch(body.url, body.ref, progress=update_review_progress)
+            answer = chat.review_repository(evidence, progress=update_review_progress)
+            review = answer.review
+            update_review_progress({'phase': 'complete',
+                                    'message': 'Review finished.' if answer.finish_reason == 'stop' else 'Review finished with incomplete batches.',
+                                    'reviewed_files': len(review['reviewed_paths']) if review else len(evidence.files),
+                                    'skipped_files': len(review['skipped']) if review else len(evidence.skipped)})
             return {**answer.model_dump(), "repository": evidence.url, "commit": evidence.commit,
-                    "reviewed_files": len(evidence.files), "skipped_files": len(evidence.skipped),
-                    "report_html": render_report(evidence, answer.answer, answer.finish_reason, MODEL)}
+                    "reviewed_files": len(review['reviewed_paths']) if review else len(evidence.files),
+                    "skipped_files": len(review['skipped']) if review else len(evidence.skipped),
+                    "report_html": render_report(evidence, answer.answer, answer.finish_reason, MODEL, review)}
         except FetchError as exc:
+            update_review_progress({'phase': 'error', 'message': 'Collection failed.'})
             return JSONResponse({"detail": str(exc)}, status_code=400)
         except ChatError as exc:
+            update_review_progress({'phase': 'error', 'message': 'Review failed.'})
             return JSONResponse({"detail": str(exc)}, status_code=502)
         finally:
             lock.release()

@@ -6,3 +6,5 @@ __pycache__/
 .env.*
 !.env.example
 *.egg-info/
+review-evaluation.json
+review-evaluation.webgoat.html

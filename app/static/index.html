@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GLM Chat</title>
   <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/review-ui.js" defer></script>
   <script src="/static/chat.js" defer></script>
 </head>
 <body>
@@ -14,15 +15,17 @@
     <p class="intro">A space to ask, explore, and work through ideas.</p>
     <form id="repository-form">
       <h2>Review GitHub source code</h2>
+      <p>Scan any public GitHub repository and read the security findings here.</p>
       <label for="repository-url">Public GitHub repository URL</label>
       <input id="repository-url" type="url" maxlength="2048" placeholder="https://github.com/owner/repository" required>
       <label for="repository-ref">Branch, tag, or commit (optional)</label>
       <input id="repository-ref" maxlength="200" placeholder="Default branch">
-      <p><small>Only supported source-code files are collected; pipeline, Docker, build, configuration, and documentation files are excluded. Selected source files are sent to Hugging Face and your GLM provider. Reviews include vulnerability evidence and proposed fixes. Large repositories may be partially reviewed; the report lists skipped files. Code is never executed or modified.</small></p>
-      <button id="review-repository" type="submit">Review and create HTML report</button>
+      <p><small>Application source is prioritized over tests and reviewed in related batches, with evidence and proposed fixes. Up to 24 model requests may be made per scan, using provider credits, and larger reviews can take several minutes. Source files are sent to Hugging Face and your GLM provider. Pipeline, Docker, build, configuration, and documentation files are excluded. The report shows actual coverage, skipped files, and failed batches. Code is never executed or modified.</small></p>
+      <button id="review-repository" type="submit">Scan repository</button>
       <button id="download-report" class="secondary" type="button" hidden>Download HTML report</button>
       <p id="repository-status" role="status" aria-live="polite"></p>
-      <pre id="repository-result" aria-label="Repository security review"></pre>
+      <div id="repository-progress" hidden aria-label="Scan progress"></div>
+      <section id="repository-result" aria-label="Repository security review" aria-busy="false"></section>
     </form>
     <form id="analysis-form">
       <h2>Analyze a webpage</h2>

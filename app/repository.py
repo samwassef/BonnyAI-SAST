@@ -15,6 +15,7 @@ from urllib.parse import quote, urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.fetcher import FetchError, PinnedConnection, resolve
+from app.review import source_priority, findings_html
 
 
 # Define the repository URL and optional branch, tag, or commit input.
@@ -48,7 +49,8 @@ def repository_name(url: str) -> str:
 class RepositoryFetcher:
     # Limit listing size and model input independently of the full repository size.
     MAX_TREE = 10_000_000
-    MAX_SOURCE = 80_000
+    MAX_SOURCE = 1_200_000
+    MAX_FILES = 400
     # Source-language allowlist; data, documentation, and configuration extensions are omitted.
     EXTENSIONS = set(".py .js .jsx .ts .tsx .mjs .cjs .php .rb .go .rs .java .kt .cs .c .h .cpp .hpp .cc .swift .scala .sh .bash .ps1 .sql .html .htm .vue .svelte .ex .exs .erl .hrl .pl .pm .lua .r .dart .sol".split())
     EXCLUDED = {"node_modules", "vendor", ".git", ".venv", "venv", "dist", "build", "__pycache__"}
@@ -126,9 +128,9 @@ class RepositoryFetcher:
         raise FetchError("GitHub redirect limit exceeded.")
 
     # Resolve a ref to a commit and tree before collecting source from that fixed snapshot.
-    def fetch(self, url: str, ref: str = "") -> RepositoryEvidence:
+    def fetch(self, url: str, ref: str = "", progress=None) -> RepositoryEvidence:
         name = repository_name(url)
-        deadline = time.monotonic() + 120
+        deadline = time.monotonic() + 300
         try:
             # Request only the SHA, avoiding the potentially huge commit diff response.
             commit = self._get(
@@ -146,14 +148,14 @@ class RepositoryFetcher:
             tree = json.loads(self._get(
                 f"https://api.github.com/repos/{name}/git/trees/{tree_sha}?recursive=1",
                 self.MAX_TREE, deadline))
-            return self.read_tree(tree, name, commit, deadline)
+            return self.read_tree(tree, name, commit, deadline, progress)
         except FetchError:
             raise
         except (OSError, http.client.HTTPException, ValueError, AttributeError, KeyError, TypeError):
             raise FetchError("Repository collection failed: check connectivity, repository/ref, or GitHub response format.") from None
 
     # Validate the file listing, choose source files, and record coverage and exclusions.
-    def read_tree(self, tree: dict, name: str, commit: str, deadline: float) -> RepositoryEvidence:
+    def read_tree(self, tree: dict, name: str, commit: str, deadline: float, progress=None) -> RepositoryEvidence:
         # Require a complete listing so the report never implies unknown files were reviewed.
         if tree.get("truncated") is not False:
             raise FetchError("GitHub returned an incomplete file list; this repository is too large for the current review. Nothing sent to GLM.")
@@ -169,10 +171,18 @@ class RepositoryFetcher:
                 raise FetchError("Unsafe or duplicate repository path; nothing sent to GLM.")
             seen.add(path)
         files, skipped = [], []
+        discovered = sum(item['type'] != 'tree' for item in entries)
+        def report_collection():
+            if progress:
+                progress({'phase': 'collecting', 'message': 'Collecting application source...',
+                          'discovered_files': discovered, 'collected_files': len(files),
+                          'reviewed_files': 0, 'skipped_files': len(skipped)})
+
+        report_collection()
         total = 0
         attempts = 0
-        # Process files deterministically; skipped files do not consume model input space.
-        for item in sorted(entries, key=lambda i: i["path"]):
+        # Application code precedes tests/tooling; adjacent packages stay together.
+        for item in sorted(entries, key=lambda i: source_priority(i["path"])):
             if item["type"] == "tree":
                 continue
             path = item["path"]
@@ -189,7 +199,9 @@ class RepositoryFetcher:
                 reason = exclusion
             elif size > 30000:
                 reason = "file exceeds 30000 bytes"
-            elif attempts >= 100 or total + size > self.MAX_SOURCE:
+            elif time.monotonic() > deadline:
+                reason = "collection time limit"
+            elif attempts >= self.MAX_FILES or total + size > self.MAX_SOURCE:
                 reason = "review input limit"
             # Download eligible files from the pinned commit and verify their listed size.
             if reason is None:
@@ -214,28 +226,105 @@ class RepositoryFetcher:
             # Retain an explicit reason for every file omitted from the review.
             if reason:
                 skipped.append({"path": path, "reason": reason})
+            if (len(files) + len(skipped)) % 10 == 0:
+                report_collection()
+        report_collection()
         if not files:
             raise FetchError("No supported source files fit the review limits; nothing sent to GLM.")
         return RepositoryEvidence(f"https://github.com/{name}", commit, files, skipped)
 
 
+def _render_findings(answer: str) -> str:
+    """Render a small Markdown subset without allowing model-supplied HTML."""
+    parts = []
+    code = None
+    fence = None
+    paragraph = []
+
+    def flush_paragraph():
+        if paragraph:
+            parts.append('<p>' + '<br>'.join(escape(line) for line in paragraph) + '</p>')
+            paragraph.clear()
+
+    for line in answer.splitlines():
+        stripped = line.strip()
+        if code is not None:
+            if re.fullmatch(re.escape(fence[0]) + '{' + str(len(fence)) + ',}', stripped):
+                parts.append('<pre><code>' + escape('\n'.join(code)) + '</code></pre>')
+                code = None
+            else:
+                code.append(line)
+            continue
+        opening = re.match(r'^(`{3,}|~{3,})[^`~]*$', stripped)
+        if opening:
+            flush_paragraph()
+            fence = opening.group(1)
+            code = []
+            continue
+        heading = re.match(r'^(#{1,4})\s+(.+)$', stripped)
+        severity = re.fullmatch(
+            r'Severity:\s*(Critical|High|Medium|Low|Informational)', stripped, re.IGNORECASE)
+        if heading:
+            flush_paragraph()
+            level = max(2, len(heading.group(1)))
+            parts.append(f'<h{level}>' + escape(heading.group(2)) + f'</h{level}>')
+        elif severity:
+            flush_paragraph()
+            value = severity.group(1).lower()
+            parts.append(f'<p><span class="severity {value}">Severity: {value.title()}</span></p>')
+        elif not stripped:
+            flush_paragraph()
+        else:
+            paragraph.append(line)
+    flush_paragraph()
+    if code is not None:
+        parts.append('<pre><code>' + escape('\n'.join(code)) + '</code></pre>')
+    return '\n'.join(parts)
+
+
 # Build a standalone HTML report with escaped findings and a coverage inventory.
-def render_report(evidence: RepositoryEvidence, answer: str, finish_reason: str, model: str) -> str:
+def render_report(evidence: RepositoryEvidence, answer: str, finish_reason: str, model: str,
+                  review: dict | None = None) -> str:
     # Escape file paths and skip reasons before placing them in HTML list items.
     def rows(items):
         return "".join("<li>" + escape(item["path"]) +
                        (" — " + escape(item["reason"]) if "reason" in item else "") + "</li>" for item in items)
     # Include model completion status separately from the review findings.
     status = "Complete model response" if finish_reason == "stop" else "Incomplete or interrupted model response: " + finish_reason
+    reviewed = evidence.files
+    skipped = evidence.skipped
+    details = ''
+    rendered = _render_findings(answer)
+    if review is not None:
+        reviewed = [{'path': path} for path in review['reviewed_paths']]
+        skipped = review['skipped']
+        status = 'Partial coverage / insufficient coverage for a repository-wide conclusion' if review['partial'] else 'Selected source review complete'
+        details = (f"<p>Collected {len(evidence.files)} files; sent {len(review['sent_paths'])} unique files including context; "
+                   f"completed {review['completed_batches']} of {review['planned_batches']} batches. "
+                   "A reviewed file belongs to a batch with a complete, validated response; this does not prove exhaustive analysis.</p>")
+        if review['failed_batches']:
+            details += '<ul>' + ''.join(f"<li>Batch {f['batch']}: {escape(f['reason'])}</li>" for f in review['failed_batches']) + '</ul>'
+        rendered = findings_html(review)
     # Escape all dynamic text; the report displays code rather than executing it.
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
-<title>GitHub source security review</title><style>body{{font:16px system-ui;max-width:1000px;margin:40px auto;padding:0 24px;color:#17212b}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f5f7;padding:24px;line-height:1.6}}li,p{{overflow-wrap:anywhere}}h1,h2{{color:#174b51}}</style></head>
+<title>GitHub source security review</title><style>
+body{{font:16px/1.65 system-ui;max-width:1000px;margin:40px auto;padding:0 24px;color:#17212b;background:#fff}}
+pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f5f7;padding:20px;border:1px solid #dce5e7;border-radius:8px;line-height:1.6}}
+code{{font:14px/1.6 ui-monospace,Consolas,monospace}}li,p,h2,h3,h4{{overflow-wrap:anywhere}}
+h1,h2{{color:#174b51}}h2{{margin-top:36px}}h3{{font-size:1.4rem;font-weight:800;border-top:2px solid #dce5e7;padding-top:24px;margin-top:36px}}
+h4{{font-size:1rem;margin:24px 0 8px;color:#334155}}.severity{{display:inline-block;border:1px solid;border-radius:6px;padding:4px 12px;font-weight:750}}
+.critical{{color:#991b1b;background:#fee2e2;border-color:#dc2626}}.high{{color:#9a3412;background:#ffedd5;border-color:#ea580c}}
+.medium{{color:#713f12;background:#fef9c3;border-color:#ca8a04}}.low,.informational{{color:#166534;background:#dcfce7;border-color:#16a34a}}
+.legend{{font-size:14px;color:#475569}}@media print{{body{{margin:0;max-width:none}}h3,h4{{break-after:avoid}}pre{{white-space:pre-wrap}}}}
+</style></head>
 <body><h1>GitHub source security review</h1><p>Repository: {escape(evidence.url)}</p>
 <p>Commit: {escape(evidence.commit)}</p><p>Generated: {datetime.now(timezone.utc).isoformat()} · Model: {escape(model)}</p>
-<p>{escape(status)}. Reviewed {len(evidence.files)} files; skipped {len(evidence.skipped)} files.</p>
+<p><strong>{escape(status)}</strong>. Reviewed {len(reviewed)} files; skipped {len(skipped)} files.</p>{details}
 <p>Automated static review of the listed files only. Findings and proposed fixes need human validation; no code or tests were executed and no fixes were applied. No findings does not establish that the repository is secure. Submodules and Git LFS contents are not fetched.</p>
-<h2>Findings and proposed fixes</h2><pre>{escape(answer)}</pre>
-<h2>Files sent to GLM</h2><ul>{rows(evidence.files)}</ul>
-<h2>Files not reviewed</h2><ul>{rows(evidence.skipped)}</ul></body></html>"""
+<h2>Findings and proposed fixes</h2>
+<p class="legend">Severity colors: red = Critical; orange = High; yellow = Medium; green = Low / Informational. Green does not mean the code is secure.</p>
+<section aria-label="Security review findings">{rendered}</section>
+<details><summary>Files successfully reviewed ({len(reviewed)})</summary><ul>{rows(reviewed)}</ul></details>
+<details><summary>Files not reviewed ({len(skipped)})</summary><ul>{rows(skipped)}</ul></details></body></html>"""

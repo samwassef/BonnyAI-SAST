@@ -74,6 +74,21 @@ class FetchTests(unittest.TestCase):
                 HTTPFetcher().fetch("https://example.com")
             self.assertEqual(connection.call_count, 1)
 
+    def test_bare_domain_can_follow_public_www_redirect(self):
+        redirect = response(b'r' * 10001, status=301,
+                            headers=[('Location', 'https://www.example.com/')])
+        final = response(b'f' * 100001)
+        with patch("app.fetcher.resolve", return_value=["93.184.216.34"]) as dns_lookup, \
+             patch("app.fetcher.PinnedConnection") as connection:
+            connection.return_value.getresponse.side_effect = [redirect, final]
+            evidence = HTTPFetcher().fetch("https://example.com/")
+        self.assertEqual(evidence.final_url, "https://www.example.com/")
+        self.assertEqual(dns_lookup.call_count, 2)
+        self.assertFalse(evidence.responses[0]['body_complete'])
+        self.assertEqual(evidence.responses[0]['body_bytes'], 10000)
+        self.assertTrue(evidence.responses[-1]['html_truncated'])
+        self.assertEqual(evidence.responses[-1]['body_bytes'], 100001)
+
     # Regression check: redirect to private or other host.
     def test_redirect_to_private_or_other_host(self):
         for location in ["http://169.254.169.254/", "https://other.example.com/", "https:///bad"]:

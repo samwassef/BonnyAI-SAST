@@ -45,8 +45,10 @@ Only public DNS hostnames on standard HTTP/HTTPS ports are supported. IP-literal
 credential-bearing, private, loopback, metadata, and transition-IP destinations are
 blocked. All A/AAAA answers are checked before connecting directly to one approved
 IP. HTTPS certificates and SNI use the original hostname. Environment proxies and
-automatic redirect following are not used. A request authorizes only the submitted
-hostname; redirects to another hostname require submitting that URL separately.
+automatic redirect following are not used. A request authorizes the submitted
+hostname and its `www` subdomain; redirects elsewhere require
+submitting that URL separately. Every redirect target is checked through DNS and
+public-IP validation before connecting.
 Targets are supplied per request; the app keeps no persistent target registry.
 
 Limits: five redirects, 100000 bytes of response headers, 1000000 downloaded body

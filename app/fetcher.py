@@ -124,6 +124,7 @@ class PageEvidence:
 # Collect bounded HTTP responses without running scripts or fetching linked assets.
 class HTTPFetcher:
     MAX_DOWNLOAD_BYTES = 1_000_000
+    MAX_REDIRECT_BYTES = 10000
     MAX_HEADER_BYTES = 100000
     MAX_EVIDENCE_CHARS = 30000
     OMISSION_MARKER = "\n<!-- HTML omitted between excerpts -->\n"
@@ -142,6 +143,7 @@ class HTTPFetcher:
     # Follow bounded same-host redirects and preserve each response as text evidence.
     def fetch(self, url: str) -> PageEvidence:
         original, allowed_host, _ = parse_url(url)
+        allowed_hosts = {allowed_host, "www." + allowed_host}
         current = original
         responses = []
         downloaded = 0
@@ -152,8 +154,8 @@ class HTTPFetcher:
             # Revalidate the hostname and DNS before every redirect hop.
             for hop in range(6):
                 current, host, port = parse_url(current)
-                if host != allowed_host:
-                    raise FetchError("Redirect changes hostname. Submit the destination URL separately.")
+                if host not in allowed_hosts:
+                    raise FetchError("Redirect changes to an unrelated hostname. Submit the destination URL separately.")
                 checkpoint()
                 if time.monotonic() > deadline:
                     raise FetchError("Collection time limit exceeded.")
@@ -167,6 +169,7 @@ class HTTPFetcher:
                         "Accept": "text/html,application/xhtml+xml,text/plain", "Connection": "close",
                     })
                     response = connection.getresponse()
+                    redirect = response.status in (301, 302, 303, 307, 308)
                     # Keep repeated headers in order and count them toward the evidence budget.
                     headers = list(response.headers.raw_items())
                     header_bytes += sum(len(k) + len(v) for k, v in headers)
@@ -177,16 +180,18 @@ class HTTPFetcher:
                     # Read incrementally to enforce byte and elapsed-time limits.
                     body = bytearray()
                     body_complete = True
+                    body_limit = min(self.MAX_REDIRECT_BYTES if redirect else self.MAX_DOWNLOAD_BYTES,
+                                     self.MAX_DOWNLOAD_BYTES - downloaded)
                     while True:
                         checkpoint()
                         if time.monotonic() > deadline:
                             raise FetchError("Collection time limit exceeded.")
-                        chunk = response.read1(min(8192, self.MAX_DOWNLOAD_BYTES - downloaded + 1))
+                        chunk = response.read1(min(8192, body_limit - len(body) + 1))
                         if not chunk:
                             if response.length is not None and response.length > 0:
                                 raise FetchError("Incomplete HTTP body; nothing sent to GLM.")
                             break
-                        remaining = self.MAX_DOWNLOAD_BYTES - downloaded
+                        remaining = body_limit - len(body)
                         body.extend(chunk[:remaining])
                         downloaded += min(len(chunk), remaining)
                         if len(chunk) > remaining:
@@ -201,7 +206,6 @@ class HTTPFetcher:
                         raise FetchError("Response cannot be decoded losslessly with its declared charset (default UTF-8).") from None
                     # Preserve a bounded, explicitly labeled head/tail excerpt for
                     # large pages while keeping the original header evidence.
-                    redirect = response.status in (301, 302, 303, 307, 308)
                     allowance = min(5000 if redirect else self.MAX_EVIDENCE_CHARS,
                                     max(0, self.MAX_EVIDENCE_CHARS - evidence_chars))
                     excerpt = self.excerpt(html, allowance) if allowance else ""

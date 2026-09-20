@@ -117,7 +117,9 @@ def create_app(chat: HFChat | None = None, port: int = 8000,
                 return {**answer.model_dump(), "final_url": evidence.final_url,
                             "status": evidence.responses[-1]["status"], "responses": len(evidence.responses),
                             "body_bytes": sum(r["body_bytes"] for r in evidence.responses),
-                            "evidence_partial": any(r.get("html_truncated") for r in evidence.responses)}
+                            "evidence_partial": any(r.get("html_truncated") for r in evidence.responses),
+                            "scripts": evidence.scripts, "scripts_skipped": evidence.scripts_skipped,
+                            "script_discovery_partial": evidence.script_discovery_partial}
             return run
         return await dispatch(request, work)
 

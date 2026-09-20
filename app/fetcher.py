@@ -10,11 +10,13 @@ import ssl
 import time
 
 from app.operation import checkpoint
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import dns.exception
 import dns.resolver
+
+from app.js_inspection import scan_js, script_urls
 
 
 # Represent collection failures using messages safe for the browser.
@@ -119,6 +121,9 @@ class PageEvidence:
     original_url: str
     final_url: str
     responses: list[dict]
+    scripts: list[dict] = field(default_factory=list)
+    scripts_skipped: int = 0
+    script_discovery_partial: bool = False
 
 
 # Collect bounded HTTP responses without running scripts or fetching linked assets.
@@ -128,6 +133,69 @@ class HTTPFetcher:
     MAX_HEADER_BYTES = 100000
     MAX_EVIDENCE_CHARS = 30000
     OMISSION_MARKER = "\n<!-- HTML omitted between excerpts -->\n"
+    MAX_JS_FILES = 12
+    MAX_JS_FILE_BYTES = 300000
+    MAX_JS_TOTAL_BYTES = 2000000
+
+    def inspect_scripts(self, html: str, page_url: str) -> tuple[list[dict], int]:
+        urls = script_urls(html, page_url)
+        selected = urls[:self.MAX_JS_FILES]
+        results = []
+        downloaded = 0
+        deadline = time.monotonic() + 45
+        for url in selected:
+            checkpoint()
+            display_url = "[blocked script URL]"
+            if time.monotonic() > deadline or downloaded >= self.MAX_JS_TOTAL_BYTES:
+                results.append({"url": display_url, "error": "JavaScript collection budget reached"})
+                continue
+            try:
+                normalized, host, port = parse_url(url)
+                parts = urlsplit(normalized)
+                display_url = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+                if parts.query:
+                    display_url += "?[redacted]"
+                ips = resolve(host)
+                connection = PinnedConnection(host, port, ips[0], normalized.startswith("https:"))
+                try:
+                    connection.request("GET", urlunsplit(("", "", parts.path, parts.query, "")), headers={
+                        "User-Agent": "GLM-Web-Analysis/0.1", "Accept-Encoding": "identity",
+                        "Accept": "text/javascript,application/javascript,*/*;q=0.1", "Connection": "close",
+                    })
+                    response = connection.getresponse()
+                    if response.status != 200:
+                        results.append({"url": display_url, "error": f"HTTP {response.status}"})
+                        continue
+                    if response.getheader("Content-Encoding", "identity").lower() != "identity":
+                        results.append({"url": display_url, "error": "Compressed JavaScript response"})
+                        continue
+                    limit = min(self.MAX_JS_FILE_BYTES, self.MAX_JS_TOTAL_BYTES - downloaded)
+                    data = bytearray()
+                    truncated = False
+                    while True:
+                        checkpoint()
+                        if time.monotonic() > deadline:
+                            truncated = True
+                            break
+                        chunk = response.read1(min(8192, limit - len(data) + 1))
+                        if not chunk:
+                            break
+                        remaining = limit - len(data)
+                        data.extend(chunk[:remaining])
+                        if len(chunk) > remaining:
+                            truncated = True
+                            break
+                    downloaded += len(data)
+                    charset = response.headers.get_content_charset() or "utf-8"
+                    source = codecs.getincrementaldecoder(charset)(errors="strict").decode(
+                        bytes(data), final=not truncated)
+                    results.append({"url": display_url, "bytes": len(data), "truncated": truncated,
+                                    "matches": scan_js(source)})
+                finally:
+                    connection.close()
+            except (FetchError, OSError, http.client.HTTPException, UnicodeError, LookupError, ValueError):
+                results.append({"url": display_url, "error": "JavaScript file could not be inspected"})
+        return results, len(urls) - len(selected)
 
     @staticmethod
     def excerpt(value: str, limit: int) -> str:
@@ -221,7 +289,8 @@ class HTTPFetcher:
                                       "html_omitted_chars": omitted,
                                       "charset": charset, "resolved_ip": ips[0]})
                     if not redirect:
-                        return PageEvidence(original, current, responses)
+                        scripts, skipped = self.inspect_scripts(html, current)
+                        return PageEvidence(original, current, responses, scripts, skipped, not body_complete)
                     if len(locations) != 1 or hop == 5:
                         raise FetchError("Invalid redirect Location or redirect limit exceeded.")
                     # Validate the Location syntax before resolving relative redirects.

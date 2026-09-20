@@ -121,6 +121,45 @@ function showReport(data) {
   document.querySelector('#download-report').hidden = false;
 }
 
+function showScripts(data) {
+  const panel = document.querySelector('#javascript-results');
+  panel.replaceChildren();
+  const title = document.createElement('h3');
+  title.textContent = `JavaScript inspection (${data.scripts.length} files)`;
+  panel.append(title);
+  const note = document.createElement('p');
+  note.textContent = 'Pattern matches are review clues, not confirmed vulnerabilities. Source values are not shown.';
+  if (data.scripts_skipped) note.textContent += ` ${data.scripts_skipped} script URLs were beyond the collection limit.`;
+  if (data.script_discovery_partial) note.textContent += ' The HTML download was partial, so some script URLs may be missing.';
+  panel.append(note);
+  for (const file of data.scripts) {
+    const details = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = file.url;
+    details.append(summary);
+    const state = document.createElement('p');
+    state.textContent = file.error || `${file.bytes} bytes inspected${file.truncated ? ' (partial file)' : ''}; ${file.matches.length} matched terms`;
+    details.append(state);
+    const categories = new Map();
+    for (const match of file.matches || []) {
+      if (!categories.has(match.category)) categories.set(match.category, []);
+      categories.get(match.category).push(match);
+    }
+    for (const [category, matches] of categories) {
+      const heading = document.createElement('h4');
+      heading.textContent = category;
+      const list = document.createElement('ul');
+      for (const match of matches) {
+        const item = document.createElement('li');
+        item.textContent = `${match.term}: ${match.count} occurrence(s), lines ${match.lines.join(', ')}`;
+        list.append(item);
+      }
+      details.append(heading, list);
+    }
+    panel.append(details);
+  }
+}
+
 document.querySelector('#repository-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   if (busy) return;
@@ -215,7 +254,7 @@ function resetSession() {
   document.querySelector('#download-report').hidden = true;
   document.querySelector('#repository-progress').hidden = true;
   document.querySelector('#repository-result').setAttribute('aria-busy', 'false');
-  for (const id of ['repository-result', 'repository-status', 'analysis-result', 'analysis-status']) {
+  for (const id of ['repository-result', 'repository-status', 'analysis-result', 'analysis-status', 'javascript-results']) {
     document.getElementById(id).textContent = '';
   }
   for (const form of document.querySelectorAll('form')) form.reset();
@@ -236,6 +275,7 @@ document.querySelector('#analysis-form').addEventListener('submit', async event 
   const result = document.querySelector('#analysis-result');
   setBusy(true);
   result.textContent = '';
+  document.querySelector('#javascript-results').replaceChildren();
   status.textContent = 'Fetching response and asking GLM to analyze it…';
   try {
     const data = await request('/api/analyze', {
@@ -243,6 +283,7 @@ document.querySelector('#analysis-form').addEventListener('submit', async event 
       question: document.querySelector('#analysis-question').value
     }, event => { if (event.type === 'progress') status.textContent = event.data.message; });
     result.textContent = data.answer;
+    showScripts(data);
     status.textContent = `HTTP ${data.status} · ${data.responses} response(s) · ${data.body_bytes} body bytes · ${data.final_url}`
       + (data.finish_reason === 'length' ? ' · Answer may be incomplete (output limit).' : '');
     if (data.evidence_partial) status.textContent += ' Partial HTML evidence: a bounded excerpt was analyzed.';

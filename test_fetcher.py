@@ -171,7 +171,9 @@ class FetchTests(unittest.TestCase):
     def test_api_fetch_then_analyze_and_failure_does_not_call_llm(self):
         chat, fetcher = Mock(spec=HFChat), Mock(spec=HTTPFetcher)
         fetcher.fetch.return_value = PageEvidence("https://example.com", "https://example.com", [
-            {"status": 200, "body_bytes": 10, "html_truncated": True}])
+            {"status": 200, "body_bytes": 10, "html_truncated": True}],
+            scripts=[{"url": "https://example.com/app.js", "bytes": 10,
+                      "truncated": False, "matches": []}])
         chat.analyze.return_value = ChatReply(answer="Analysis", finish_reason="stop")
         client = TestClient(create_app(chat, fetcher=fetcher), base_url="http://127.0.0.1:8000")
         headers = {"Origin": "http://127.0.0.1:8000", "X-Chat-Request": "1"}
@@ -179,6 +181,7 @@ class FetchTests(unittest.TestCase):
         reply = client.post("/api/analyze", json=body, headers=headers)
         self.assertEqual(reply.status_code, 200)
         self.assertTrue(reply.json()["evidence_partial"])
+        self.assertEqual(reply.json()["scripts"][0]["url"], "https://example.com/app.js")
         chat.analyze.reset_mock()
         fetcher.fetch.side_effect = FetchError("Blocked")
         self.assertEqual(client.post("/api/analyze", json=body, headers=headers).status_code, 400)

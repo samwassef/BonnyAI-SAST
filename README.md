@@ -39,7 +39,23 @@ JSON encoding, which preserves these values after decoding. This is not a raw wi
 headers and removes transfer framing; body bytes are strictly decoded with the
 declared charset, or UTF-8 when absent. Unsupported/invalid text encodings fail
 instead of replacing characters. Compressed responses are rejected if a server
-ignores `Accept-Encoding: identity`. No scripts run and no linked assets are fetched.
+ignores `Accept-Encoding: identity`. No scripts run.
+
+After collecting the final HTML response, the analyzer discovers linked `<script src>`
+files and inspects up to 12 of them. Each script URL gets the same public-DNS/IP,
+standard-port, direct-connection and TLS checks as the page. Linked scripts may be
+hosted on a different public hostname; JavaScript redirects are not followed.
+The inspector downloads at most 300000 bytes per file and 2000000 bytes total, with
+a 45-second collection window. Partial files and failed requests are marked. If the
+HTML download is partial, undiscovered scripts may remain. Query values in script
+URLs are redacted in the results.
+
+The **JavaScript inspection** section lists each file and the requested clue
+categories with matched terms, counts and line numbers. These are static pattern
+matches, not confirmed vulnerabilities or executed tests. Matched values and full
+JavaScript source are not shown in the page or sent to GLM; the model receives only
+bounded category summaries. Manual review is needed to establish reachability,
+data flow, and actual exposure.
 
 Only public DNS hostnames on standard HTTP/HTTPS ports are supported. IP-literal,
 credential-bearing, private, loopback, metadata, and transition-IP destinations are

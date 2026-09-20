@@ -245,6 +245,7 @@ document.querySelector('#analysis-form').addEventListener('submit', async event 
     result.textContent = data.answer;
     status.textContent = `HTTP ${data.status} · ${data.responses} response(s) · ${data.body_bytes} body bytes · ${data.final_url}`
       + (data.finish_reason === 'length' ? ' · Answer may be incomplete (output limit).' : '');
+    if (data.evidence_partial) status.textContent += ' Partial HTML evidence: a bounded excerpt was analyzed.';
   } catch (error) {
     status.textContent = error.message || 'Connection failed.';
   } finally {

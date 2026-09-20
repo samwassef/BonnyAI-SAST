@@ -84,11 +84,11 @@ class FetchTests(unittest.TestCase):
                     HTTPFetcher().fetch("https://example.com")
                 self.assertEqual(connection.call_count, 1)
 
-    # Regression check: oversize encoding and incomplete rejected.
-    def test_oversize_encoding_and_incomplete_rejected(self):
+    # Regression check: invalid encoding and incomplete responses still fail.
+    def test_encoding_and_incomplete_rejected(self):
         incomplete = response()
         incomplete.length = 10
-        for result in [response(b"x" * 100001), response(b"\xff"), incomplete,
+        for result in [response(b"\xff"), incomplete,
                        response(headers=[("Content-Encoding", "gzip")])]:
             with patch("app.fetcher.resolve", return_value=["93.184.216.34"]), \
                  patch("app.fetcher.PinnedConnection") as connection:
@@ -96,6 +96,33 @@ class FetchTests(unittest.TestCase):
                 with self.assertRaises(FetchError):
                     HTTPFetcher().fetch("https://example.com")
                 connection.return_value.close.assert_called_once()
+
+    def test_large_html_is_explicitly_bounded_instead_of_rejected(self):
+        body = b'a' * 1000001
+        with patch("app.fetcher.resolve", return_value=["93.184.216.34"]), \
+             patch("app.fetcher.PinnedConnection") as connection:
+            connection.return_value.getresponse.return_value = response(body)
+            evidence = HTTPFetcher().fetch("https://example.com")
+        item = evidence.responses[0]
+        self.assertEqual(item['body_bytes'], 1000000)
+        self.assertFalse(item['body_complete'])
+        self.assertTrue(item['html_truncated'])
+        self.assertEqual(len(item['html']), 30000)
+        self.assertIn('HTML omitted between excerpts', item['html'])
+
+    def test_json_expansion_shortens_html_and_marks_partial(self):
+        evidence = PageEvidence("https://example.com", "https://example.com", [
+            {"headers": [], "html": "\x01" * 60000, "body_bytes": 60000,
+             "body_complete": True, "html_truncated": False, "html_omitted_chars": 0}])
+        with patch("app.chat.InferenceClient") as factory:
+            call = factory.return_value.__enter__.return_value.chat_completion
+            call.return_value = SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="Partial analysis"), finish_reason="stop")])
+            HFChat("test-token").analyze("Explain", evidence)
+            payload = call.call_args.kwargs["messages"][-1]["content"]
+        self.assertLessEqual(len(payload), 140000)
+        self.assertTrue(evidence.responses[0]['html_truncated'])
+        self.assertGreater(evidence.responses[0]['html_omitted_chars'], 0)
 
     # Regression check: pinned socket and tls hostname.
     def test_pinned_socket_and_tls_hostname(self):
@@ -129,12 +156,14 @@ class FetchTests(unittest.TestCase):
     def test_api_fetch_then_analyze_and_failure_does_not_call_llm(self):
         chat, fetcher = Mock(spec=HFChat), Mock(spec=HTTPFetcher)
         fetcher.fetch.return_value = PageEvidence("https://example.com", "https://example.com", [
-            {"status": 200, "body_bytes": 10}])
+            {"status": 200, "body_bytes": 10, "html_truncated": True}])
         chat.analyze.return_value = ChatReply(answer="Analysis", finish_reason="stop")
         client = TestClient(create_app(chat, fetcher=fetcher), base_url="http://127.0.0.1:8000")
         headers = {"Origin": "http://127.0.0.1:8000", "X-Chat-Request": "1"}
         body = {"url": "https://example.com", "question": "Explain"}
-        self.assertEqual(client.post("/api/analyze", json=body, headers=headers).status_code, 200)
+        reply = client.post("/api/analyze", json=body, headers=headers)
+        self.assertEqual(reply.status_code, 200)
+        self.assertTrue(reply.json()["evidence_partial"])
         chat.analyze.reset_mock()
         fetcher.fetch.side_effect = FetchError("Blocked")
         self.assertEqual(client.post("/api/analyze", json=body, headers=headers).status_code, 400)

@@ -2,6 +2,7 @@
 
 # Imports used by the request models, services, and helpers below.
 import http.client
+import codecs
 import ipaddress
 import re
 import socket
@@ -122,14 +123,30 @@ class PageEvidence:
 
 # Collect bounded HTTP responses without running scripts or fetching linked assets.
 class HTTPFetcher:
-    MAX_BYTES = 100000
+    MAX_DOWNLOAD_BYTES = 1_000_000
+    MAX_HEADER_BYTES = 100000
+    MAX_EVIDENCE_CHARS = 30000
+    OMISSION_MARKER = "\n<!-- HTML omitted between excerpts -->\n"
+
+    @staticmethod
+    def excerpt(value: str, limit: int) -> str:
+        if len(value) <= limit:
+            return value
+        marker = HTTPFetcher.OMISSION_MARKER
+        if limit <= len(marker):
+            return value[:limit]
+        retained = limit - len(marker)
+        head = retained * 3 // 4
+        return value[:head] + marker + value[-(retained - head):]
 
     # Follow bounded same-host redirects and preserve each response as text evidence.
     def fetch(self, url: str) -> PageEvidence:
         original, allowed_host, _ = parse_url(url)
         current = original
         responses = []
-        total = 0
+        downloaded = 0
+        header_bytes = 0
+        evidence_chars = 0
         deadline = time.monotonic() + 45
         try:
             # Revalidate the hostname and DNS before every redirect hop.
@@ -152,38 +169,54 @@ class HTTPFetcher:
                     response = connection.getresponse()
                     # Keep repeated headers in order and count them toward the evidence budget.
                     headers = list(response.headers.raw_items())
-                    total += sum(len(k) + len(v) for k, v in headers)
-                    if total > self.MAX_BYTES:
-                        raise FetchError("Response exceeds the 100000-byte evidence limit; nothing sent to GLM.")
+                    header_bytes += sum(len(k) + len(v) for k, v in headers)
+                    if header_bytes > self.MAX_HEADER_BYTES:
+                        raise FetchError("Response headers exceed the 100000-byte limit; nothing sent to GLM.")
                     if response.getheader("Content-Encoding", "identity").lower() != "identity":
                         raise FetchError("Server returned compressed content despite identity encoding request.")
                     # Read incrementally to enforce byte and elapsed-time limits.
                     body = bytearray()
+                    body_complete = True
                     while True:
                         checkpoint()
                         if time.monotonic() > deadline:
                             raise FetchError("Collection time limit exceeded.")
-                        chunk = response.read1(min(8192, self.MAX_BYTES - total + 1))
+                        chunk = response.read1(min(8192, self.MAX_DOWNLOAD_BYTES - downloaded + 1))
                         if not chunk:
                             if response.length is not None and response.length > 0:
                                 raise FetchError("Incomplete HTTP body; nothing sent to GLM.")
                             break
-                        body.extend(chunk)
-                        total += len(chunk)
-                        if total > self.MAX_BYTES:
-                            raise FetchError("Response exceeds the 100000-byte evidence limit; nothing sent to GLM.")
+                        remaining = self.MAX_DOWNLOAD_BYTES - downloaded
+                        body.extend(chunk[:remaining])
+                        downloaded += min(len(chunk), remaining)
+                        if len(chunk) > remaining:
+                            body_complete = False
+                            break
                     # Decode losslessly; unsupported or invalid encodings fail the collection.
                     charset = response.headers.get_content_charset() or "utf-8"
                     try:
-                        html = bytes(body).decode(charset, errors="strict")
+                        html = codecs.getincrementaldecoder(charset)(errors="strict").decode(
+                            bytes(body), final=body_complete)
                     except (UnicodeError, LookupError):
                         raise FetchError("Response cannot be decoded losslessly with its declared charset (default UTF-8).") from None
-                    # Save this response before deciding whether to follow its redirect.
+                    # Preserve a bounded, explicitly labeled head/tail excerpt for
+                    # large pages while keeping the original header evidence.
+                    redirect = response.status in (301, 302, 303, 307, 308)
+                    allowance = min(5000 if redirect else self.MAX_EVIDENCE_CHARS,
+                                    max(0, self.MAX_EVIDENCE_CHARS - evidence_chars))
+                    excerpt = self.excerpt(html, allowance) if allowance else ""
+                    evidence_chars += len(excerpt)
+                    omitted = len(html) - len(excerpt)
+                    if omitted > 0 and allowance > len(self.OMISSION_MARKER):
+                        omitted += len(self.OMISSION_MARKER)
                     locations = response.headers.get_all("Location", [])
                     responses.append({"url": current, "status": response.status,
-                                      "reason": response.reason, "headers": headers, "html": html,
-                                      "body_bytes": len(body), "charset": charset, "resolved_ip": ips[0]})
-                    if response.status not in (301, 302, 303, 307, 308):
+                                      "reason": response.reason, "headers": headers, "html": excerpt,
+                                      "body_bytes": len(body), "body_complete": body_complete,
+                                      "html_truncated": len(excerpt) < len(html) or not body_complete,
+                                      "html_omitted_chars": omitted,
+                                      "charset": charset, "resolved_ip": ips[0]})
+                    if not redirect:
                         return PageEvidence(original, current, responses)
                     if len(locations) != 1 or hop == 5:
                         raise FetchError("Invalid redirect Location or redirect limit exceeded.")

@@ -47,7 +47,7 @@
       <input id="target-url" type="url" maxlength="8192" placeholder="https://example.com/" required>
       <label for="analysis-question">What would you like GLM to analyze?</label>
       <textarea id="analysis-question" maxlength="4000" rows="2" required>Analyze the HTTP headers and HTML. Explain your observations and cite the evidence.</textarea>
-      <p><small>Headers and full HTML, including cookies and any embedded sensitive data, are sent unchanged to Hugging Face and the inference provider. Only submit websites you are authorized to access. No JavaScript execution.</small></p>
+      <p><small>Headers and HTML, including cookies and any embedded sensitive data, are sent to Hugging Face and the inference provider. Large pages use a labeled excerpt. Only submit websites you are authorized to access. No JavaScript execution.</small></p>
       <button id="analyze" type="submit">Fetch and analyze</button>
       <p id="analysis-status" role="status" aria-live="polite"></p>
       <pre id="analysis-result" aria-label="Webpage analysis"></pre>

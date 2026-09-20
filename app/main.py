@@ -115,8 +115,9 @@ def create_app(chat: HFChat | None = None, port: int = 8000,
                 emit("progress", {"message": "Analyzing HTTP headers and HTML..."})
                 answer = client.analyze(body.question, evidence)
                 return {**answer.model_dump(), "final_url": evidence.final_url,
-                        "status": evidence.responses[-1]["status"], "responses": len(evidence.responses),
-                        "body_bytes": sum(r["body_bytes"] for r in evidence.responses)}
+                            "status": evidence.responses[-1]["status"], "responses": len(evidence.responses),
+                            "body_bytes": sum(r["body_bytes"] for r in evidence.responses),
+                            "evidence_partial": any(r.get("html_truncated") for r in evidence.responses)}
             return run
         return await dispatch(request, work)
 

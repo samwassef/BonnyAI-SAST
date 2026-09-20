@@ -23,17 +23,19 @@ Hugging Face. The result shows the final URL, HTTP status, number of responses,
 body byte count, and model analysis. This analysis is separate from chat history;
 submitting again fetches again. No evidence is saved to disk.
 
-**Headers and HTML are sent without redaction, extraction, or summarization**, as
-requested. This includes cookie values and any credentials or sensitive content
-returned by the website. The app does not forward its Hugging Face token, browser
+**Headers and small HTML responses are sent without redaction or summarization**.
+For larger responses, the analyzer sends a bounded excerpt from the beginning and
+end of the collected HTML and marks the evidence partial. This can include cookie
+values and any credentials or sensitive content returned by the website. The app does not forward its Hugging Face token, browser
 cookies, or user-supplied request headers to the target. The token is used only by
 the inference client. The user question and untrusted evidence are separate
 messages; the model receives no tools and cannot initiate additional requests.
 
 Repeated response headers (including Set-Cookie) are preserved as ordered name/value
-pairs. Each redirect response and its body are included. HTML whitespace, inline
-scripts, and comments are retained. The payload uses JSON encoding, which preserves
-these values after decoding. This is not a raw wire capture: the HTTP library parses
+pairs. Each redirect response is included, with at most 5000 HTML characters from
+its body. The final response receives the remaining excerpt budget. Within each
+excerpt, whitespace, inline scripts, and comments are retained. The payload uses
+JSON encoding, which preserves these values after decoding. This is not a raw wire capture: the HTTP library parses
 headers and removes transfer framing; body bytes are strictly decoded with the
 declared charset, or UTF-8 when absent. Unsupported/invalid text encodings fail
 instead of replacing characters. Compressed responses are rejected if a server
@@ -47,9 +49,11 @@ automatic redirect following are not used. A request authorizes only the submitt
 hostname; redirects to another hostname require submitting that URL separately.
 Targets are supplied per request; the app keeps no persistent target registry.
 
-Limits: five redirects, 100000 bytes across response bodies and header names/values,
-and 140000 characters of serialized evidence. Exceeding a limit fails before the
-LLM call; there is no silent truncation or chunking. DNS queries have a three-second
+Limits: five redirects, 100000 bytes of response headers, 1000000 downloaded body
+bytes across responses, 30000 HTML characters in the combined excerpts, and 140000
+characters of serialized model evidence. Large bodies are clipped explicitly and the
+result is labeled partial; oversized headers still fail before the LLM call. The
+analyzer does not fetch or infer omitted content. DNS queries have a three-second
 lifetime per address family. Sockets have a ten-second inactivity timeout, with a
 45-second collection budget checked between hops and body reads (an in-flight
 operation can exceed that budget). Provider context limits may still reject a

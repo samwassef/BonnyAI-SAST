@@ -19,7 +19,9 @@ The original terminal-token local mode remains available for development.
 Restart the server after updating dependencies with the commands below. In the
 **HTTP analysis** tab, enter an HTTP(S) URL and your question, then click
 **Fetch and analyze**. Python collects the response and sends it to GLM-5.3 through
-Hugging Face. The result shows the final URL, HTTP status, number of responses,
+Hugging Face. The formatted report starts with an executive summary and presents
+each finding with a bold name and a color-coded severity badge. The result also
+shows the final URL, HTTP status, number of responses,
 body byte count, and model analysis. This analysis is separate from chat history;
 submitting again fetches again. No evidence is saved to disk.
 

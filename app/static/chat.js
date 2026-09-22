@@ -160,6 +160,92 @@ function showScripts(data) {
   }
 }
 
+const httpSeverities = ['critical', 'high', 'medium', 'low', 'informational'];
+
+function reportText(parent, text, className) {
+  const paragraph = document.createElement('p');
+  paragraph.textContent = text;
+  if (className) paragraph.className = className;
+  parent.append(paragraph);
+}
+
+function renderHttpReport(answer) {
+  const result = document.querySelector('#analysis-result');
+  result.replaceChildren();
+  const lines = answer.replace(/\r/g, '').split('\n');
+  let current = null;
+  const hasExecutiveSummary = lines.some(line => /^#{1,3}\s+Executive Summary\s*$/i.test(line.trim()));
+
+  const openSection = (title, className = 'http-report-section') => {
+    const section = document.createElement('section');
+    section.className = className;
+    const heading = document.createElement(className === 'http-finding' ? 'h3' : 'h2');
+    if (className === 'http-finding') {
+      const strong = document.createElement('strong');
+      strong.textContent = title;
+      heading.append(strong);
+    } else {
+      heading.textContent = title;
+    }
+    section.append(heading);
+    result.append(section);
+    current = section;
+  };
+
+  if (!hasExecutiveSummary) {
+    const severities = lines.map(line => line.replace(/\*\*/g, '').trim()
+      .match(/^Severity:\s*(Critical|High|Medium|Low|Informational)\b/i)?.[1]).filter(Boolean);
+    const severityRank = {critical: 0, high: 1, medium: 2, low: 3, informational: 4};
+    const highest = [...severities].sort((a, b) => severityRank[a.toLowerCase()] - severityRank[b.toLowerCase()])[0];
+    openSection('Executive Summary', 'http-executive-summary');
+    const risk = severities.length
+      ? `${severities.length} finding${severities.length === 1 ? '' : 's'} reported. Highest reported severity: ${highest}.`
+      : 'The analysis did not report a severity-rated finding.';
+    reportText(current, `${risk} Review the evidence and coverage limitations below.`);
+  }
+
+  for (const original of lines) {
+    const line = original.trim();
+    if (!line) continue;
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      const title = heading[2].replace(/^Finding:\s*/i, '');
+      if (/^Executive Summary$/i.test(title)) {
+        openSection('Executive Summary', 'http-executive-summary');
+      } else if (heading[1].length === 3 || /^Finding:/i.test(heading[2])) {
+        openSection(title, 'http-finding');
+      } else {
+        openSection(title);
+      }
+      continue;
+    }
+    if (!current) openSection('Report');
+    const severity = line.replace(/\*\*/g, '').match(/^Severity:\s*(Critical|High|Medium|Low|Informational)\b/i);
+    if (severity) {
+      const value = severity[1].toLowerCase();
+      const badge = document.createElement('span');
+      badge.className = `severity severity-${httpSeverities.includes(value) ? value : 'unknown'}`;
+      badge.textContent = `Severity: ${severity[1][0].toUpperCase()}${severity[1].slice(1).toLowerCase()}`;
+      current.append(badge);
+      continue;
+    }
+    const listItem = line.match(/^[-*]\s+(.+)$/);
+    if (listItem) {
+      let list = current.lastElementChild;
+      if (!list || list.tagName !== 'UL') {
+        list = document.createElement('ul');
+        current.append(list);
+      }
+      const item = document.createElement('li');
+      item.textContent = listItem[1];
+      list.append(item);
+      continue;
+    }
+    reportText(current, line.replace(/^\*\*(.+?)\*\*:\s*/, '$1: '));
+  }
+
+}
+
 document.querySelector('#repository-form').addEventListener('submit', async (event) => {
   event.preventDefault();
   if (busy) return;
@@ -282,7 +368,7 @@ document.querySelector('#analysis-form').addEventListener('submit', async event 
       url: document.querySelector('#target-url').value,
       question: document.querySelector('#analysis-question').value
     }, event => { if (event.type === 'progress') status.textContent = event.data.message; });
-    result.textContent = data.answer;
+    renderHttpReport(data.answer);
     showScripts(data);
     status.textContent = `HTTP ${data.status} · ${data.responses} response(s) · ${data.body_bytes} body bytes · ${data.final_url}`
       + (data.finish_reason === 'length' ? ' · Answer may be incomplete (output limit).' : '');
